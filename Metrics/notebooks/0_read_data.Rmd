@@ -1,0 +1,569 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Processing Data with the objetive of designing metrics for team performance - Open17 Climate Gender
+
+
+1. Read the data files
+
+```{r}
+
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+
+source("../../Accelerate/notebooks/custom_functions.R")
+
+teams = read_excel("../data/O17ClimateGender_teamformation.xlsx")
+#teams = lapply(teams, as.character)
+
+assesment = read_excel("../data/O17ClimateGender_assessment.xlsx")
+
+load("../../Accelerate/processed data/registration.RData")
+
+map = read.csv("../../Accelerate/data/team_users_hashed.csv", stringsAsFactors = FALSE)
+colnames(map) = c("Team", "ID", "Hash", "Mentors")
+
+reg = merge(reg, map[,c("Team", "Hash")], by.x = "ID", by.y = "Hash")
+
+reg_map = c("A2: Women & Technology Against Climate Change" = "T6: Women & Technology Against Climate Change", "B2: TEAM FOILED" = "T3: TEAM FOILED", "C1: Andapé Institute" = "T13: Andapé Institute", "C3: WOMER" = "T5: WOMER", "A5: Donate Water Project" = "T9: DonateWater", "B5: Rights of Climate" = "T11: Rights of Climate", "B3: Eco Winners" = "T14: Eco Winners", "B4: Women 4 Sustainable World" = "T12: Women 4 Sustainable World", "A1: Up Get App/CitiCERN" = "T7: UpGet app - CitiCERN Project", "B1: Water Warriors" = "T10: Water Warriors", "C2: PAM" = "T4: PAM", "C4: Climate Gender Justice" = "T8: Climate Gender Justice", "A3: Rhythm of Bamboos" = "T1: SDesiGn (Old name: Rhythm of Bamboos)", "C5: Ashifa Nazrin" = "C5: Ashifa Nazrin", "A4: Flood Rangers" = "T2: Flood Rangers")
+
+reg_map = data.frame(old_name = names(reg_map), new_name = reg_map)
+reg = merge(reg, reg_map, by.x = "Team", by.y = "old_name", all.x = TRUE)
+
+write.csv(unnest(reg, cols = c("communication")), file = "../processed data/reg_edited.csv")
+
+map = merge(map, reg_map, by.x = "Team", by.y = "old_name", all.x = TRUE)
+map$new_name = as.character(map$new_name)
+map$new_name[map$Team == "Organizing Team"] = "Organizing Team"
+
+```
+
+Outcome Variable
+
+1. Outcome end of Evaluate
+
+```{r}
+
+outcome = assesment[,c("Team", "Total", "Weekly Evaluation", "Commitment", "Attendance", "Deliverables")]
+outcome = merge(outcome, teams[,c("Team Name", "Stage")], by.x = "Team", by.y = "Team Name", all.x = TRUE)
+outcome$Stage = factor(outcome$Stage, levels = c("Evaluate", "Accelerate", "Refine"), ordered = TRUE)
+
+```
+
+
+2. Surveys and Interactions
+
+```{r}
+
+load("../../Evaluate/processed data/surveys.RData")
+
+inter = interactions[,c(1,8,2,3)]
+inter = merge(inter, map[,c("ID", "new_name")], by.x = "user_id", by.y = "ID", all.x = TRUE)
+colnames(inter) = c("From", "To", "Survey_id", "Question", "From_team")
+inter = merge(inter, map[,c("ID", "new_name")], by.x = "To", by.y = "ID", all.x = TRUE)
+colnames(inter)[colnames(inter) == "new_name"] = "To_team"
+
+inter = inter[!inter$To %in% c(34), c(2,1,3,4,5,6)]
+
+g_int_teams = graph_from_data_frame(inter[,c(5,6,1:4)], directed = TRUE, vertices = teams)
+E(g_int_teams)$weight = 1
+g_int_teams_simp = simplify(g_int_teams, remove.loops = FALSE)
+
+
+```
+
+
+3. Create an Extensive dataframe with different things that can be calculated with the Interaction data
+
+Listing them out here (by Team)
+
+1. # of responses
+2. in-degree (self, from other teams) + normalised (proportion of in edges to self/others etc.)
+2. out-degree (org team, other teams) + normalised
+3. ...
+
+
+```{r}
+
+inter_pr = inter %>% group_by(From_team, To_team) %>% summarise(weight = n())
+
+# Responses, Out degree to Org Team, Other peers, Self
+
+temp = inter_pr %>% group_by(From_team) %>% summarise(no_responses = n(), self_interactions = weight[To_team == From_team], org_interactions = weight[To_team == "Organizing Team"], peers_out = sum(weight[!To_team %in% c(From_team, "Organizing Team")]))
+
+stats = temp
+
+# In-degree from other peers
+
+temp = inter_pr %>% group_by(To_team) %>% summarise(peers_in = sum(weight[!From_team %in% c(To_team, "Organizing Team")]))
+stats = merge(stats, temp, by.x = "From_team", by.y = "To_team", all.x = TRUE, all.y = TRUE)
+
+stats$self_interactions_norm = 2*stats$self_interactions/(2*stats$self_interactions + stats$peers_in + stats$org_interactions + stats$peers_out)
+stats$org_interactions_norm = stats$org_interactions/(2*stats$self_interactions + stats$peers_in + stats$org_interactions + stats$peers_out)
+stats$peers_out_norm = stats$peers_out/(2*stats$self_interactions + stats$peers_in + stats$org_interactions + stats$peers_out)
+stats$peers_in_norm = stats$peers_in/(2*stats$self_interactions + stats$peers_in + stats$org_interactions + stats$peers_out)
+
+stats = stats[!stats$From_team %in% c("Organizing Team"),]
+
+```
+
+
+Slack Interactions
+
+```{r}
+
+load("../../Evaluate/processed data/slack_all_int.RData")
+
+inter_sl = df_total %>% group_by(From_Team, To_Team) %>% summarise(weight = n())
+colnames(inter_sl) = c("From_team", "To_team", "weight")
+
+temp_1 = inter_sl %>% group_by(From_team) %>% summarise(slack_self_interactions = weight[To_team == From_team], slack_org_out = weight[To_team == "Organizing Team"], slack_peers_out = sum(weight[!To_team %in% c(From_team, "Organizing Team")]))
+
+temp_2 = inter_sl %>% group_by(To_team) %>% summarise(slack_peers_in = sum(weight[!From_team %in% c(To_team, "Organizing Team")]), slack_org_in = weight[From_team == "Organizing Team"])
+
+slack_stats = merge(temp_1, temp_2, by.x = "From_team", by.y = "To_team", all.x = TRUE, all.y = TRUE)
+slack_stats = slack_stats[!slack_stats$From_team %in% c("Organizing Team", "Tool Owner"),]
+
+slack_stats = merge(slack_stats, reg_map, by.x = "From_team", by.y = "old_name", all.x = TRUE)
+slack_stats$From_team = slack_stats$new_name
+slack_stats = slack_stats %>% select(-new_name)
+slack_stats[is.na(slack_stats)] = 0
+
+
+slack_stats$slack_self_interactions_norm = 2*slack_stats$slack_self_interactions/(2*slack_stats$slack_self_interactions + slack_stats$slack_org_out + slack_stats$slack_peers_out + slack_stats$slack_peers_in + slack_stats$slack_org_in)
+
+slack_stats$slack_org_out_norm = slack_stats$slack_org_out/(2*slack_stats$slack_self_interactions + slack_stats$slack_org_out + slack_stats$slack_peers_out + slack_stats$slack_peers_in + slack_stats$slack_org_in)
+slack_stats$slack_peers_out_norm = slack_stats$slack_peers_out/(2*slack_stats$slack_self_interactions + slack_stats$slack_org_out + slack_stats$slack_peers_out + slack_stats$slack_peers_in + slack_stats$slack_org_in)
+slack_stats$slack_peers_in_norm = slack_stats$slack_peers_in/(2*slack_stats$slack_self_interactions + slack_stats$slack_org_out + slack_stats$slack_peers_out + slack_stats$slack_peers_in + slack_stats$slack_org_in)
+slack_stats$slack_org_in_norm = slack_stats$slack_org_in/(2*slack_stats$slack_self_interactions + slack_stats$slack_org_out + slack_stats$slack_peers_out + slack_stats$slack_peers_in + slack_stats$slack_org_in)
+
+
+```
+
+Merge
+
+```{r}
+
+interaction_stats = merge(stats, slack_stats, by.x = "From_team", by.y = "From_team", all.x = TRUE, all.y = TRUE)
+
+```
+
+
+Network Properties
+
+```{r}
+
+network_stats = data.frame(nodes = V(g_int_teams_simp)$name, strength_in = strength(g_int_teams_simp, mode = "in"), strength_out = strength(g_int_teams_simp, mode = "out"), betweenness = betweenness(g_int_teams_simp, weights = 1/E(g_int_teams_simp)$weight, normalized = TRUE), burt = constraint(g_int_teams_simp, weights = E(g_int_teams_simp)$weight))
+
+```
+
+
+
+************************************************************************
+
+3. Thinking about Metrics
+
+a. Descriptive
+  i) Gender Diversity
+  ii) Assembled/Self organised
+  iii) Background
+  iv) SDG experience
+  v) 
+  
+b. Interactions
+  i) Interaction with ORG
+  ii) Interaction with Team members
+  iii) Interaction with other teams
+  
+c. Tasks
+
+**********************************
+
+a) Processing Reg. file to make teamwise diversity metrics
+
+Entropy - low score for less diversity (Higher for more diversity)
+
+```{r}
+
+shannon = function(list)
+{
+  ent = 0
+  for (i in unique(list))
+  {
+    t = sum(list == i)
+    n = length(list)
+    ent = ent + (t/n)*log(t/n)
+  }
+  
+  return(-1*ent)
+}
+
+simpson = function(list)
+{
+  ent = 0
+  for (i in unique(list))
+  {
+    t = sum(list == i)
+    n = length(list)
+    ent = ent + (t/n)*(t/n)
+  }
+  
+  return(1/ent)
+}
+
+```
+
+
+```{r}
+
+metrics = data.frame(Team = unique(reg$new_name))
+
+for (i in c("gender", "country_orig", "country_resid", "education", "communication", "exante_project_SDG", "background", "occupation"))
+{
+  temp = reg[,c("new_name", i)]
+  temp = clean_split_mcq(temp)
+  colnames(temp) = c("Team", "var")
+  
+#  num = temp$var
+  
+  t = temp %>% group_by(Team) %>% summarise(shannon = shannon(var), simpson = simpson(var))
+  colnames(t) = c("Team", paste(i, "_shannon", sep = ''), paste(i, "_simpson", sep = ''))
+  
+  metrics = merge(metrics, t, by.x = "Team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+  
+}
+
+metrics = merge(metrics, teams, by.x = "Team", by.y = "Team Name", all.x = TRUE)
+
+metrics_score = merge(metrics, assesment, by.x = "Team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+
+```
+
+```{r}
+
+library(corrplot)
+
+#metrics_score$`Final Pitch` = as.numeric(metrics_score$`Final Pitch`)
+#M = cor(metrics_score[,c(2,4,6,8,10,14,16,19,21,24:27,31)], use = "complete.obs")
+#corrplot(M, method = 'number') # colorful number
+
+temp = merge(interaction_stats, outcome, by.x = "From_team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+M = cor(temp[,c(2:(ncol(temp)-1))], use = "complete.obs")
+corrplot(M, method = "number")
+```
+
+Cleaner Version
+
+```{r}
+
+#outcome = c("Final Pitch", "Appropriateness of Methodology", "Weekly Evaluation", "Commitment", "Attendance", "Deliverables", "Sum", "Total")
+
+df_corr = data.frame()
+
+for (i in colnames(outcome))
+{
+  if(! i %in% c("Team", "Stage"))
+  {
+    for (j in colnames(interaction_stats))
+    {
+      if(!j %in% c("From_team", "no_responses"))
+      {
+        c = cor.test(temp[,j], temp[,i])
+        
+        df_corr = rbind(df_corr, data.frame(i = i, j = j, cor = c$estimate, p_val = c$p.value))
+        
+      }
+    }
+  }
+}
+
+```
+
+```{r}
+
+df_corr$cor[df_corr$p_val > 0.1] = 0
+df_corr$cor = round(df_corr$cor, 3)
+
+plt = ggplot(df_corr) + geom_tile(aes(x = i, y = j, fill = cor), lwd = 1.5, linetype = 1) + scale_fill_gradient2(low = "blue", high = "red") + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) + ylab("") + xlab("") + geom_text(aes(x = i, y = j, label = cor))
+
+ggplotly(plt)
+
+```
+Network Props
+
+```{r}
+
+temp = merge(assesment, network_stats, by.x = "Team", by.y = "nodes", all.x = TRUE, all.y = TRUE)
+temp = temp[!temp$Team == "Organizing Team",]
+
+#outcome = c("Final Pitch", "Appropriateness of Methodology", "Weekly Evaluation", "Commitment", "Attendance", "Deliverables", "Sum", "Total")
+
+df_corr = data.frame()
+
+for (i in colnames(outcome))
+{
+  if(! i %in% c("Team", "Stage"))
+  {
+    for (j in colnames(network_stats))
+    {
+      if(!j %in% c("nodes"))
+      {
+        c = cor.test(temp[,j], temp[,i])
+        
+        df_corr = rbind(df_corr, data.frame(i = i, j = j, cor = c$estimate, p_val = c$p.value))
+        
+      }
+    }
+  }
+}
+
+
+df_corr$cor[df_corr$p_val > 0.1] = 0
+df_corr$cor = round(df_corr$cor, 3)
+
+plt = ggplot(df_corr) + geom_tile(aes(x = i, y = j, fill = cor), lwd = 1.5, linetype = 1) + scale_fill_gradient2(low = "blue", high = "red") + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) + ylab("") + xlab("") + geom_text(aes(x = i, y = j, label = cor))
+
+ggplotly(plt)
+```
+
+Diversity
+
+```{r}
+
+temp = merge(metrics[,c(1:17)], outcome, by.x = "Team", by.y = "Team")
+df_corr = data.frame()
+
+for (i in colnames(outcome))
+{
+  if(! i %in% c("Team", "Stage"))
+  {
+    for (j in colnames(metrics))
+    {
+      if(!j %in% c("Team", "Type", "Stage"))
+      {
+        c = cor.test(temp[,j], temp[,i])
+        
+        df_corr = rbind(df_corr, data.frame(i = i, j = j, cor = c$estimate, p_val = c$p.value))
+        
+      }
+    }
+  }
+}
+
+df_corr$cor[df_corr$p_val > 0.1] = 0
+df_corr$cor = round(df_corr$cor, 3)
+
+plt = ggplot(df_corr) + geom_tile(aes(x = i, y = j, fill = cor), lwd = 1.5, linetype = 1) + scale_fill_gradient2(low = "blue", high = "red") + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) + ylab("") + xlab("") + geom_text(aes(x = i, y = j, label = cor))
+
+ggplotly(plt)
+
+```
+
+
+
+*******************************************************************************
+
+Some Teamwise Network Properties
+
+```{r}
+
+inter = interactions[,c(1,8,2,3)]
+inter = merge(inter, map[,c("ID", "Team")], by.x = "user_id", by.y = "ID", all.x = TRUE)
+colnames(inter) = c("From", "To", "Survey_id", "Question", "From_team")
+inter = merge(inter, map[,c("ID", "Team")], by.x = "To", by.y = "ID", all.x = TRUE)
+colnames(inter)[colnames(inter) == "Team"] = "To_team"
+
+inter = inter[!inter$To %in% c(34), c(2,1,3,4,5,6)]
+
+g_int_teams = graph_from_data_frame(inter[,c(5,6,1:4)], directed = TRUE)
+E(g_int_teams)$weight = 1
+g_int_teams_simp = simplify(g_int_teams, remove.loops = FALSE)
+
+
+```
+
+Network Metrics
+
+1. Weighted interactions (Other teams, self, ORG)
+2. Normalised weighted interactions - total = 1
+
+
+```{r}
+
+process_interactions = function(inter)
+{
+  temp = inter %>% group_by(From_team, To_team) %>% summarise(weight = n())
+  temp_out = temp %>% group_by(From_team) %>% summarise(self = weight[To_team == From_team], org_out = weight[To_team == "Organizing Team"], peers_out = sum(weight[!To_team %in% c(From_team, "Organizing Team")]))
+
+  temp_in = temp %>% group_by(To_team) %>% summarise(peers_in = sum(weight[!From_team == To_team]))
+
+  degr = merge(temp_out, temp_in, by.x = "From_team", by.y = "To_team", all.x = TRUE, all.y = TRUE)
+  colnames(degr)[colnames(degr) == "From_team"] = "Team"
+
+  degr = degr[!degr$Team == "Organizing Team",]
+  return(degr)
+}
+
+```
+
+
+
+```{r}
+
+degr = process_interactions(inter)
+#degr = merge(degr, reg_map, by.x = "Team", by.y = "old_name")
+
+degr = merge(degr, assesment, by.x = "new_name", by.y = "Team", all.x = TRUE, all.y = TRUE)
+degr_as = merge(degr, teams, by.x = "new_name", by.y = "Team Name")
+
+```
+
+
+Pre-Formed vs Assembled
+
+i) All Interactions
+
+```{r}
+
+pdf("../figures/stats_team_type_box.pdf")
+
+for (i in colnames(degr_as))
+{
+  if(!i %in% c("new_name", "Team", "Type", "Geographic Location", "Gender F/M", "Stage"))
+  {
+    temp = degr_as[,c("Type", i)]
+    colnames(temp) = c("Type", "var")
+    #t = temp %>% group_by(Type) %>% summarise(mean = mean(var), se = se(var))
+    
+    plt = ggplot(temp, aes(x = Type, y = var)) + geom_boxplot() + theme_bw(base_size = 20) + xlab("") + ylab("") + ggtitle(i) + geom_point(aes(x = Type, y = var), alpha = 0.3)
+    
+    print(plt)
+    
+  }
+}
+
+dev.off()
+
+
+pdf("../figures/stats_team_type_bar.pdf")
+
+for (i in colnames(degr_as))
+{
+  if(!i %in% c("new_name", "Team", "Type", "Geographic Location", "Gender F/M", "Stage"))
+  {
+    temp = degr_as[,c("Type", i)]
+    colnames(temp) = c("Type", "var")
+    t = temp %>% group_by(Type) %>% summarise(mean = mean(var), se = se(var))
+    
+    plt = ggplot(t, aes(x = Type, y = mean)) + geom_bar(stat = "identity") + geom_errorbar(aes(ymin = mean-se, ymax = mean+se), width = 0) + theme_bw(base_size = 20) + xlab("") + ylab("") + ggtitle(i)
+    
+    print(plt)
+    
+  }
+}
+
+dev.off()
+```
+
+ii) Specific Interactions
+
+```{r}
+
+
+for (j in unique(inter$Question))
+{  
+  
+  a = process_interactions(inter[inter$Question == j,])
+  a = merge(a, reg_map, by.x = "Team", by.y = "old_name")
+  a = merge(a, teams, by.x = "new_name", by.y = "Team Name")
+  
+  pdf(paste("../figures/", j, "_box.pdf", sep = ""))
+  
+  for (i in colnames(a))
+  {
+    if(!i %in% c("new_name", "Team", "Type", "Stage"))
+    {
+      temp = a[,c("Type", i)]
+      colnames(temp) = c("Type", "var")
+      plt = ggplot(temp, aes(x = Type, y = var)) + geom_boxplot() + theme_bw(base_size = 20) + xlab("") + ylab("") + ggtitle(i) + geom_point(aes(x = Type, y = var), alpha = 0.3)
+      
+      print(plt)
+      
+    }
+  }
+  
+  dev.off()
+  
+pdf(paste("../figures/", j, "_bar.pdf", sep = ""))
+
+for (i in colnames(a))
+{
+  if(!i %in% c("new_name", "Team", "Type", "Geographic Location", "Gender F/M", "Stage"))
+  {
+    temp = a[,c("Type", i)]
+    colnames(temp) = c("Type", "var")
+    t = temp %>% group_by(Type) %>% summarise(mean = mean(var), se = se(var))
+    
+    plt = ggplot(t, aes(x = Type, y = mean)) + geom_bar(stat = "identity") + geom_errorbar(aes(ymin = mean-se, ymax = mean+se), width = 0) + theme_bw(base_size = 20) + xlab("") + ylab("") + ggtitle(i)
+    
+    print(plt)
+    
+  }
+}
+
+dev.off()
+
+}
+```
+
+
+
+***********************************************************************************************
+
+
+```{r}
+
+pdf("../figures/stats_team_progress_box.pdf")
+
+for (i in colnames(degr_as))
+{
+  if(!i %in% c("new_name", "Team", "Type", "Geographic Location", "Gender F/M", "Stage"))
+  {
+    temp = degr_as[,c("Stage", i)]
+    colnames(temp) = c("Type", "var")
+    #t = temp %>% group_by(Type) %>% summarise(mean = mean(var), se = se(var))
+    
+    plt = ggplot(temp, aes(x = Type, y = var)) + geom_boxplot() + theme_bw(base_size = 20) + xlab("") + ylab("") + ggtitle(i) + geom_point(aes(x = Type, y = var), alpha = 0.3)
+    
+    print(plt)
+    
+  }
+}
+
+dev.off()
+
+
+pdf("../figures/stats_team_progress_bar.pdf")
+
+for (i in colnames(degr_as))
+{
+  if(!i %in% c("new_name", "Team", "Type", "Geographic Location", "Gender F/M", "Stage"))
+  {
+    temp = degr_as[,c("Stage", i)]
+    colnames(temp) = c("Type", "var")
+    t = temp %>% group_by(Type) %>% summarise(mean = mean(var), se = se(var))
+    
+    plt = ggplot(t, aes(x = Type, y = mean)) + geom_bar(stat = "identity") + geom_errorbar(aes(ymin = mean-se, ymax = mean+se), width = 0) + theme_bw(base_size = 20) + xlab("") + ylab("") + ggtitle(i)
+    
+    print(plt)
+    
+  }
+}
+
+dev.off()
+```

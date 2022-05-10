@@ -1,0 +1,709 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+0. Load Data
+
+```{r}
+
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(sjPlot)
+library(ggplot2)
+library(plotly)
+
+source("../../Accelerate/notebooks/custom_functions.R")
+
+teams = read_excel("../data/O17ClimateGender_teamformation.xlsx")
+#teams = lapply(teams, as.character)
+
+assesment = read_excel("../data/O17ClimateGender_assessment.xlsx")
+
+load("../../Accelerate/processed data/registration.RData")
+
+map = read.csv("../../Accelerate/data/team_users_hashed.csv", stringsAsFactors = FALSE)
+colnames(map) = c("Team", "ID", "Hash", "Mentors")
+
+reg = merge(reg, map[,c("Team", "Hash")], by.x = "ID", by.y = "Hash")
+
+reg_map = c("A2: Women & Technology Against Climate Change" = "T6: Women & Technology Against Climate Change", "B2: TEAM FOILED" = "T3: TEAM FOILED", "C1: Andapé Institute" = "T13: Andapé Institute", "C3: WOMER" = "T5: WOMER", "A5: Donate Water Project" = "T9: DonateWater", "B5: Rights of Climate" = "T11: Rights of Climate", "B3: Eco Winners" = "T14: Eco Winners", "B4: Women 4 Sustainable World" = "T12: Women 4 Sustainable World", "A1: Up Get App/CitiCERN" = "T7: UpGet app - CitiCERN Project", "B1: Water Warriors" = "T10: Water Warriors", "C2: PAM" = "T4: PAM", "C4: Climate Gender Justice" = "T8: Climate Gender Justice", "A3: Rhythm of Bamboos" = "T1: SDesiGn (Old name: Rhythm of Bamboos)", "C5: Ashifa Nazrin" = "C5: Ashifa Nazrin", "A4: Flood Rangers" = "T2: Flood Rangers")
+
+reg_map = data.frame(old_name = names(reg_map), new_name = reg_map)
+reg = merge(reg, reg_map, by.x = "Team", by.y = "old_name", all.x = TRUE)
+
+write.csv(unnest(reg, cols = c("communication")), file = "../processed data/reg_edited.csv")
+
+map = merge(map, reg_map, by.x = "Team", by.y = "old_name", all.x = TRUE)
+map$new_name = as.character(map$new_name)
+map$new_name[map$Team == "Organizing Team"] = "Organizing Team"
+
+size = map %>% group_by(new_name) %>% summarise(size = n())
+
+jury_scores = read.csv("../data/assessment_sheet1.csv", stringsAsFactors = FALSE)
+
+jury_scores_avg = jury_scores %>% group_by(Choose.the.Team) %>% summarise(mean_novelty = mean(Novelty..Is.the.pitch.based.on.a.new.idea.or.concept.or.using.existing.concepts.in.a.new.context., na.rm = TRUE), mean_relevance = mean(Relevance..Is.the.solution.proposed.relevant.to.the.challenge.or.potentially.impactful.., na.rm = TRUE), mean_feasibility = mean(Feasibility..Is.the.project.implementable.with.reasonable.time.and.effort.from.the.team., na.rm = TRUE), mean_crowdsourcing = mean(Crowdsourcing..Is.there.an.effective.crowdsourcing.component., na.rm = TRUE), mean_presentation = mean(How.would.you.rate.this.team.s.overall.presentation.skills.during.this.pitch., na.rm = TRUE))
+
+jury_scores_avg = jury_scores_avg[-c(1),]
+
+```
+
+Outcome Variable
+
+
+```{r}
+
+outcome = assesment[,c("Team", "Total", "Weekly Evaluation", "Commitment", "Attendance", "Deliverables", "Final Pitch", "Data Collection and NSO", "Appropriateness of Methodology")]
+outcome = merge(outcome, teams[,c("Team Name", "Stage", "Type")], by.x = "Team", by.y = "Team Name", all.x = TRUE)
+outcome$Stage = factor(outcome$Stage, levels = c("Evaluate", "Accelerate", "Refine"), ordered = TRUE)
+
+outcome = merge(outcome, jury_scores_avg, by.x = "Team", by.y = "Choose.the.Team", all.x = TRUE, all.y = TRUE)
+outcome$stage_progressed = 0
+outcome$stage_progressed[outcome$Stage == "Accelerate"] = 1
+outcome$stage_progressed[outcome$Stage == "Refine"] = 2
+
+outcome$formation = 0
+outcome$formation[outcome$Type == "Algorithm"] = 1
+
+```
+
+
+Surveys and Interactions
+
+```{r}
+
+load("../../Evaluate/processed data/surveys.RData")
+
+inter = interactions[,c(1,8,2,3)]
+inter = merge(inter, map[,c("ID", "new_name")], by.x = "user_id", by.y = "ID", all.x = TRUE)
+colnames(inter) = c("From", "To", "Survey_id", "Question", "From_team")
+inter = merge(inter, map[,c("ID", "new_name")], by.x = "To", by.y = "ID", all.x = TRUE)
+colnames(inter)[colnames(inter) == "new_name"] = "To_team"
+
+inter = inter[!inter$To %in% c(34), c(2,1,3,4,5,6)]
+
+teams = merge(teams, size, by.x = "Team Name", by.y = "new_name", all.x = TRUE)
+
+g_int = graph_from_data_frame(inter, directed = FALSE, vertices = map[,c(2,1,3,4,5)])
+
+g_int_teams = graph_from_data_frame(inter[,c(5,6,1:4)], directed = FALSE, vertices = teams)
+E(g_int_teams)$weight = 1
+g_int_teams_simp = simplify(g_int_teams, remove.loops = FALSE)
+
+write.csv(inter, "../processed data/survey_interactions.csv")
+
+```
+
+
+***********************
+
+1. Survey Metrics
+
+a) Interactions
+
+```{r}
+
+#Known Before
+
+g_kb = subgraph.edges(g_int_teams, eids = E(g_int_teams)[E(g_int_teams)$Question == "Which of these people did you know personally before?"], delete.vertices = FALSE)
+E(g_kb)$weight = 1
+g_kb_simp = simplify(g_kb, remove.loops = FALSE)
+
+g_kb_users = subgraph.edges(g_int, eids = E(g_int)[E(g_int)$Question == "Which of these people did you know personally before?"], delete.vertices = FALSE)
+
+team_kb = data.frame()
+
+for (i in V(g_kb_simp)$name)
+{
+  g = induced_subgraph(g_kb_users, vids = V(g_kb_users)[V(g_kb_users)$new_name == i])
+  
+  intra = length(E(g_kb_simp)[get.edge.ids(g_kb_simp, vp = c(i, i))])
+  org = length(E(g_kb_simp)[get.edge.ids(g_kb_simp, vp = c(i, "Organizing Team"))])
+  inte = degree(g_kb_simp, v = i) - (2*intra) - org
+  size = V(g_kb_simp)$size[V(g_kb_simp)$name == i]
+  
+  team_kb = rbind(team_kb, data.frame(team = i, known_before = intra/choose(size,2), known_before_others = inte, size = size, max_components = max(components(g)$csize/size)))
+}
+
+
+```
+
+
+Question on "strength_org_per_team"
+
+```{r}
+
+#Seek Advice
+
+g_sa = subgraph.edges(g_int_teams, eids = E(g_int_teams)[E(g_int_teams)$Question == "Who did you seek advice from last week?"], delete.vertices = FALSE)
+E(g_sa)$weight = 1
+g_sa_simp = simplify(g_sa, remove.loops = FALSE)
+
+g_int_sa = subgraph.edges(g_int, eids = E(g_int)[E(g_int)$Question == "Who did you seek advice from last week?"], delete.vertices = FALSE)
+E(g_int_sa)$weight = 1
+g_int_sa_simp = simplify(g_int_sa, remove.loops = FALSE)
+
+team_sa = data.frame()
+
+for (i in V(g_sa_simp)$name)
+{
+  
+  g = induced_subgraph(g_int_sa_simp, vids = V(g_int_sa_simp)[V(g_int_sa_simp)$new_name == i])
+  
+  intra = length(E(g_sa_simp)[get.edge.ids(g_sa_simp, vp = c(i, i))])
+  org = length(E(g_sa_simp)[get.edge.ids(g_sa_simp, vp = c(i, "Organizing Team"))])
+  inte = degree(g_sa_simp, v = i) - (2*intra) - org
+  
+  intra_wt = E(g_sa_simp)$weight[get.edge.ids(g_sa_simp, vp = c(i, i))]
+  org_wt = E(g_sa_simp)$weight[get.edge.ids(g_sa_simp, vp = c(i, "Organizing Team"))]
+  
+  if(length(org_wt) == 0)
+    org_wt = 0
+  if(length(intra_wt) == 0)
+    intra_wt = 0
+  
+  inte_wt = strength(g_sa_simp, v = i) - (2*intra_wt) - org_wt
+  
+  team_sa = rbind(team_sa, data.frame(team = i, density_intra_sa = igraph::edge_density(g), mean_strength_intra_sa = intra_wt/ecount(g), degree_inter_sa = inte, strength_org_per_person_sa = org_wt/vcount(g)))
+}
+
+```
+
+```{r}
+
+#Work With
+
+g_ww = subgraph.edges(g_int_teams, eids = E(g_int_teams)[E(g_int_teams)$Question == "Who did you work with last week?"], delete.vertices = FALSE)
+E(g_ww)$weight = 1
+g_ww_simp = simplify(g_ww, remove.loops = FALSE)
+
+g_int_ww = subgraph.edges(g_int, eids = E(g_int)[E(g_int)$Question == "Who did you work with last week?"], delete.vertices = FALSE)
+E(g_int_ww)$weight = 1
+g_int_ww_simp = simplify(g_int_ww, remove.loops = FALSE)
+
+team_ww = data.frame()
+
+for (i in V(g_ww_simp)$name)
+{
+  
+  g = induced_subgraph(g_int_ww_simp, vids = V(g_int_ww_simp)[V(g_int_ww_simp)$new_name == i])
+  
+  intra = length(E(g_ww_simp)[get.edge.ids(g_ww_simp, vp = c(i, i))])
+  org = length(E(g_ww_simp)[get.edge.ids(g_ww_simp, vp = c(i, "Organizing Team"))])
+  inte = degree(g_ww_simp, v = i) - (2*intra) - org
+  
+  intra_wt = E(g_ww_simp)$weight[get.edge.ids(g_ww_simp, vp = c(i, i))]
+  org_wt = E(g_ww_simp)$weight[get.edge.ids(g_ww_simp, vp = c(i, "Organizing Team"))]
+  
+  if(length(org_wt) == 0)
+    org_wt = 0
+  if(length(intra_wt) == 0)
+    intra_wt = 0
+  
+  inte_wt = strength(g_ww_simp, v = i) - (2*intra_wt) - org_wt
+  
+  team_ww = rbind(team_ww, data.frame(team = i, density_intra_ww = igraph::edge_density(g), mean_strength_intra_ww = intra_wt/ecount(g), degree_inter_ww = inte, strength_org_per_person_ww = org_wt/vcount(g)))
+  
+}
+
+```
+
+Network Properties 
+
+```{r}
+
+team_net_merged = data.frame()
+
+kb_props = data.frame(team = V(g_kb_simp)$name, burt_kb = constraint(g_kb_simp, weights = E(g_kb_simp)$weight), closeness_kb = closeness(g_kb_simp, weights = 1/E(g_kb_simp)$weight, normalized = TRUE), betweenness_kb = betweenness(g_kb_simp, weights = 1/E(g_kb_simp)$weight, normalized = TRUE))
+
+sa_props = data.frame(team = V(g_sa_simp)$name, burt_sa = constraint(g_sa_simp, weights = E(g_sa_simp)$weight), closeness_sa = closeness(g_sa_simp, weights = 1/E(g_sa_simp)$weight, normalized = TRUE), betweenness_sa = betweenness(g_sa_simp, weights = 1/E(g_sa_simp)$weight, normalized = TRUE))
+
+ww_props = data.frame(team = V(g_ww_simp)$name, burt_ww = constraint(g_ww_simp, weights = E(g_ww_simp)$weight), closeness_ww = closeness(g_ww_simp, weights = 1/E(g_ww_simp)$weight, normalized = TRUE), betweenness_ww = betweenness(g_ww_simp, weights = 1/E(g_ww_simp)$weight, normalized = TRUE))
+
+team_net_merged = merge(kb_props, sa_props, by.x = "team", by.y = "team", all.x = TRUE, all.y = TRUE)
+team_net_merged = merge(team_net_merged, ww_props, by.x = "team", by.y = "team", all.x = TRUE, all.y = TRUE)
+
+```
+
+
+b) Tasks Correlations and Regularity
+
+```{r}
+
+tasks = merge(tasks, map[,c("Hash", "new_name")], by.x = "user_hash", by.y = "Hash", all.x = TRUE)
+tasks$Team = tasks$new_name
+
+a =  reshape2::acast(tasks, user_hash~tasks, length, drop = FALSE)
+a[a>0] = 1 #Involved in an activity or not
+
+b = reshape2::acast(tasks, new_name~tasks, length, drop = FALSE)
+b[b>0] = 1
+
+team_task_stats = data.frame()
+
+for (i in unique(map$new_name))
+{
+  mem = map$Hash[map$new_name == i]
+  ss = a[rownames(a) %in% mem,]
+  
+  sb = b[rownames(b) == i,]
+  
+  if(!is.null(nrow(ss)))
+  {
+     rs = rowSums(ss)/ncol(ss)
+     cs = colSums(ss)/nrow(ss)
+  }
+  
+  team_task_stats = rbind(team_task_stats, data.frame(team = i, mean_person_per_task = mean(cs), mean_task_per_person = mean(rs), team_activity_span = sum(sb)/length(sb)))
+  
+} 
+
+tasks = tasks %>% select(-c("survey_id_no_exist", "new_name"))
+
+write.csv(tasks, "../processed data/survey_tasks.csv")
+
+```
+
+Regularity
+
+```{r}
+
+tasks = tasks %>% rowwise() %>% mutate(week = strsplit(survey_name, ":")[[1]][1])
+tasks$week = factor(tasks$week, levels = c("Weekly 1", "Weekly 2", "Weekly 3", "Weekly 4"))
+
+team_reg = data.frame()
+
+for (i in unique(tasks$tasks))
+{
+  
+  b = reshape2::acast(tasks[tasks$tasks == i, c("Team", "week")], Team~week, length, drop = FALSE)
+  team_reg = rbind(team_reg, data.frame(team = rownames(b), task = i, no_weeks = apply(b, 1, function(x) sum(x>0)), gini = apply(b, 1, function(x) 1-ineq::Gini(x, corr = TRUE))))
+
+}
+
+team_reg_avg = team_reg %>% group_by(team) %>% summarise(mean_nweeks_task = mean(no_weeks), mean_gini_task = mean(gini))
+
+t = reshape2::acast(tasks, Team~week, length, drop = FALSE)
+team_reg_overall = data.frame(team = rownames(t), gini_overall_task = apply(t, 1, function(x) 1-ineq::Gini(x, corr = TRUE)))
+
+team_reg_avg = merge(team_reg_avg, team_reg_overall, by.x = "team", by.y= "team", all.x = TRUE, all.y = TRUE)
+
+```
+
+
+2. Slack Metrics
+
+```{r}
+
+load("../../Evaluate/processed data/slack_all_int.RData")
+
+df_total = df_total[df_total$timestamp <= as.numeric(as.POSIXct("2021-11-30", origin = "1970-01-01")),]
+g_slack = graph_from_data_frame(df_total[,c(3,4,1,2,3)], directed = FALSE)
+E(g_slack)$weight = 1
+g_slack_simp = simplify(g_slack, remove.loops = FALSE)
+
+vertices = read.csv("../../Evaluate/processed data/slack_id_verified.csv", stringsAsFactors = FALSE) %>% drop_na()
+vertices$Team[vertices$Team == "Tool Owner"] = "Organizing Team"
+
+g_slack_users = graph_from_data_frame(df_total, vertices = vertices[, c(3,2,4,5,6)], directed = FALSE)
+E(g_slack_users)$weight = 1
+g_slack_users_simp = simplify(g_slack_users, remove.loops = TRUE)
+
+write.csv(df_total, "../processed data/slack_interactions.csv")
+
+```
+
+```{r}
+
+stats_slack = data.frame()
+
+for (i in V(g_slack_simp)$name)
+{
+  if (!i %in% c("Organizing Team", "Tool Owner"))
+  {
+    
+    g = induced_subgraph(g_slack_users_simp, vids = V(g_slack_users_simp)[V(g_slack_users_simp)$Team == i])
+    
+    intra = length(E(g_slack_simp)[get.edge.ids(g_slack_simp, vp = c(i, i))])
+    org = length(E(g_slack_simp)[get.edge.ids(g_slack_simp, vp = c(i, "Organizing Team"))])
+    inte = degree(g_slack_simp, v = i) - 2*intra - org
+    
+    intra_wt = E(g_slack_simp)$weight[get.edge.ids(g_slack_simp, vp = c(i, i))]
+    org_wt = E(g_slack_simp)$weight[get.edge.ids(g_slack_simp, vp = c(i, "Organizing Team"))]
+    
+    if (length(intra_wt) == 0)
+      intra_wt = 0
+    if (length(org_wt) == 0)
+      org_wt = 0
+    
+    inte_wt = strength(g_slack_simp, vids = i) - 2*intra_wt - org_wt
+    
+    ed = intra/ecount(g)
+    if (is.nan(ed))
+      ed = 0
+    
+    stats_slack = rbind(stats_slack, data.frame(team = i, density_intra_slack = edge_density(g), strength_intra_slack = intra_wt, mean_strength_intra_slack = ed, degree_inter_slack = inte, strength_inter_slack = inte_wt, strength_org_slack = org_wt))
+  }
+}
+
+stats_slack = merge(stats_slack, reg_map, by.x = "team", by.y = "old_name", all.x = TRUE)
+
+```
+
+General Slack Props
+
+```{r}
+
+texts = texts[texts$timestamp <= as.POSIXct("2021-11-30", origin = "1970-01-01"),]
+t = texts %>% group_by(Team) %>% summarise(count_slack = n())
+
+team_slack = data.frame(team = V(g_slack_simp)$name, burt_slack = constraint(g_slack_simp, weights = E(g_slack_simp)$weight), betweenness_slack = betweenness(g_slack_simp, weights = 1/E(g_slack_simp)$weight, normalized = TRUE), closeness_slack = closeness(g_slack_simp, weights = 1/E(g_slack_simp)$weight, normalized = TRUE))
+
+team_slack = merge(team_slack, t, by.x = "team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+team_slack$count[is.na(team_slack$count)] = 0
+team_slack = team_slack[!team_slack$team %in% c("Organizing Team", "Tool Owner"),]
+
+team_slack = merge(team_slack, reg_map, by.x = "team", by.y = "old_name", all.x = TRUE)
+
+write.csv(texts, "../processed data/slack_messages.csv")
+
+```
+
+
+3. Diversity Metrics
+
+```{r}
+
+shannon = function(list)
+{
+  ent = 0
+  for (i in unique(list))
+  {
+    t = sum(list == i)
+    n = length(list)
+    ent = ent + (t/n)*log(t/n)
+  }
+  
+  return(-1*ent)
+}
+
+reg$age = floor(as.numeric(difftime(as.Date("2022-04-01"), as.Date(reg$birthday, tryFormats = c("%m/%d/%Y")), unit="weeks"))/52.25)
+metrics = data.frame(Team = unique(reg$new_name))
+
+for (i in c("gender", "country_orig", "country_resid", "education", "communication", "exante_project_SDG", "background", "occupation"))
+{
+  temp = reg[,c("new_name", i)]
+  temp = clean_split_mcq(temp)
+  colnames(temp) = c("Team", "var")
+  
+
+  t = temp %>% group_by(Team) %>% summarise(shannon = shannon(var), span = length(unique(var)))
+  colnames(t) = c("Team", paste(i, "_shannon", sep = ''), paste(i, "_span", sep = ''))
+  
+  metrics = merge(metrics, t, by.x = "Team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+  
+}
+
+metrics = merge(metrics, teams, by.x = "Team", by.y = "Team Name", all.x = TRUE)
+
+reg$education_code = 0
+reg$education_code[reg$education == "Highschool"] = 1
+reg$education_code[reg$education == "University (Undergraduate / Bachelors)"] = 2
+reg$education_code[reg$education == "University (Graduate / Masters)"] = 3
+
+
+age = reg[,c("new_name", "age", "exante_project", "education_code")] %>% group_by(new_name) %>% summarise(mean_age = mean(age), mean_exante = sum(exante_project == "Yes")/length(exante_project), age_gap = max(age) - min(age), mean_education = mean(education_code))
+
+metrics = merge(metrics, age, by.x = "Team", by.y = "new_name", all.x = TRUE, all.y = TRUE)
+metrics$team = metrics$Team
+
+
+metrics = metrics %>% select(-c("Team", "Stage", "Type"))
+
+```
+
+************************
+
+Correlations
+
+
+```{r}
+
+x = colnames(outcome)
+x = x[!x %in% c("Team", "Stage", "Type")]
+
+outcome$`Data Collection and NSO`[is.na(outcome$`Data Collection and NSO`)] = 0
+
+temp_outcome = outcome
+LoS = 0.1
+
+```
+
+Function for computing the correlation matrix
+
+```{r}
+
+corr_matrix = function(matrix, colnames1, colnames2)
+{
+  df_corr = data.frame()
+  
+  for (i in colnames1)
+  {
+    for (j in colnames2)
+    {
+      c = cor.test(matrix[,j], matrix[,i])
+      df_corr = rbind(df_corr, data.frame(i = i, j = j, cor = c$estimate, p_val = c$p.value))
+    }
+  }
+  
+  return(df_corr)
+}
+
+
+eval_randomized = function(col1, col2, n = 1000)
+{
+  df_rand = data.frame()
+  
+  for (i in 1:n)
+  {
+    c = cor.test(sample(col1), col2)
+    df_rand = rbind(df_rand, data.frame(iteration = i, p_val = c$p.value, cor = c$estimate))
+  }
+  
+  #return(sum(df_rand$p_val <= LoS)/n)
+  return(df_rand$cor)
+  
+}
+
+```
+
+
+
+*****************************************************************************************
+
+```{r}
+
+df_list = list("known_before" = team_kb, "seek_advice" = team_sa, "work_with" = team_ww, "merged_network" = team_net_merged, "merged_slack" = team_slack, "slack_statistics" = stats_slack, "team_task_stats" = team_task_stats, "task_regularity" = team_reg_avg, "diversity_metrics" = metrics)
+
+df_sig = data.frame()
+
+for (i in 1:length(df_list))
+{
+  pdf(paste("../figures/correlations/", names(df_list)[i], "_outcome.pdf", sep = ""), height = 10, width = 12)
+  
+  temp_outcome$Team = sample(temp_outcome$Team)
+  
+  df = df_list[[i]]
+  y = colnames(df)
+  
+  if ("new_name" %in% y)
+    df$team = df$new_name
+  
+  temp = merge(df[!df$team %in% c("Organizing Team", "C5: Ashifa Nazrin"),], outcome, by.x = "team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+  temp_rand = merge(df[!df$team %in% c("Organizing Team", "C5: Ashifa Nazrin"),], temp_outcome, by.x = "team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+  
+  df_corr = corr_matrix(temp, x, y[!y %in% c("team", "new_name")])
+  df_corr_rand = corr_matrix(temp_rand, x, y[!y %in% c("team", "new_name")])
+  
+  df_corr$cor[df_corr$p_val > LoS] = 0
+  df_corr$cor = round(df_corr$cor, 3)
+
+  df_corr_rand$cor[df_corr_rand$p_val > LoS] = 0
+  df_corr_rand$cor = round(df_corr_rand$cor, 3)
+  
+  plt = ggplot(df_corr) + geom_tile(aes(x = j, y = i, fill = cor), lwd = 1.5, linetype = 1) + scale_fill_gradient2(low = "blue", high = "red") + theme_bw(base_size = 15) +    
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) + ylab("") + xlab("") + geom_text(aes(x = j, y = i, label = cor)) +
+  ggtitle(paste(names(df_list)[i], " vs Outcome", sep = ""))
+  
+  if (length(y) > 5)
+    plt = plt + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.text.x = element_text(angle = 90))
+  
+  #ggsave(plt, filename = paste("../figures/correlations/", names(df_list)[i], "_outcome.png", sep = ""), width = 12, height = 7)
+  print(plt)
+  
+  plt = ggplot(df_corr_rand) + geom_tile(aes(x = j, y = i, fill = cor), lwd = 1.5, linetype = 1) + scale_fill_gradient2(low = "blue", high = "red") + theme_bw(base_size = 15) +    
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) + ylab("") + xlab("") + geom_text(aes(x = j, y = i, label = cor)) +
+  ggtitle(paste(names(df_list)[i], " vs Outcome Rand", sep = ""))
+  
+  if (length(y) > 5)
+    plt = plt + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.text.x = element_text(angle = 90))
+  
+  #ggsave(plt, filename = paste("../figures/rand_correlations/", names(df_list)[i], "_outcome_rand.png", sep = ""), width = 12, height = 7)
+  print(plt)
+  
+  dev.off()
+  
+  df_sig = rbind(df_sig, df_corr[df_corr$p_val <= LoS, c("i","j")])
+  
+}
+
+df_sig = df_sig %>% drop_na()
+
+```
+
+
+*****************************************************************************************
+
+Linear Model
+
+```{r}
+kb = team_kb[, c("team", "max_components")]
+sa = team_sa[, c("degree_inter_sa", "density_intra_sa", "team")]
+#colnames(sa) = c("degree_inter_sa", "density_intra_sa", "team")
+ww = team_ww[, c("mean_strength_intra_ww", "team")]
+#colnames(ww) = c("mean_strength_intra_ww", "team")
+
+ts = team_slack[, c("new_name", "burt_slack", "closeness_slack", "count_slack")]
+colnames(ts) = c("team", "burt_slack", "closeness_slack", "no_messages_slack")
+ss = stats_slack[, c("new_name", "strength_intra_slack", "degree_inter_slack", "strength_inter_slack", "strength_org_slack")]
+colnames(ss) = c("team", "strength_intra_slack", "degree_inter_slack", "strength_inter_slack", "strength_org_slack")
+
+tra = team_reg_avg[, c("team", "mean_nweeks_task", "mean_gini_task", "gini_overall_task")]
+#colnames(tra) = c("team", "mean_nweeks_task", "mean_gini_task", "gini_overall_task")
+
+temp = sa
+temp = merge(temp, kb, by.x = "team", by.y = "team", all.x = TRUE, all.y = TRUE)
+temp = merge(temp, ww, by.x = "team", by.y = "team", all.x = TRUE, all.y = TRUE)
+temp = merge(temp, team_net_merged[, c("team", "burt_sa", "closeness_sa")], by.x = "team", by.y = "team", all.x = TRUE, all.y = TRUE)
+temp = merge(temp, ts, by.x = "team", by.y = "team", all.x = TRUE, all.y = TRUE)
+temp = merge(temp, ss, by.x = "team", by.y = "team", all.x = TRUE, all.y = TRUE)
+temp = merge(temp, team_task_stats[,c("mean_task_per_person", "team", "team_activity_span")], by.x = "team", by.y = "team", all.x = TRUE, all.y = TRUE)
+temp = merge(temp, tra, by.x = "team", by.y = "team", all.x = TRUE, all.y = TRUE)
+temp = merge(temp, metrics[, c("gender_shannon", "education_shannon", "team", "background_span", "size", "mean_age", "mean_exante", "age_gap", "mean_education")], by.x = "team", by.y = "team", all.x = TRUE, all.y = TRUE)
+
+temp = temp[!temp$team %in% c("Organizing Team", "C5: Ashifa Nazrin", NA),]
+#temp = merge(temp, outcome[,c("Team", "formation")], by.x = "team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+
+df_key_attributes = temp
+
+```
+
+Linear Models for different outcome variables
+
+```{r, eval = FALSE}
+
+for (i in c("Total", "Weekly Evaluation", "Commitment" , "Attendance", "Deliverables", "Final Pitch", "mean_novelty", "mean_relevance", "mean_feasibility", "mean_crowdsourcing", "mean_presentation"))
+{
+  mod_temp = merge(temp, outcome[,c(i, "Team")], by.x = "team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+  v = df_sig[df_sig$i == i,]
+  
+  list = as.character(v$j)
+  list = list[list %in% colnames(temp)]
+  
+  formula = paste(paste(i, " ~ ", sep = ""), gsub(",", "+", (toString(list))), sep = "")
+  
+  mod = lm(data = mod_temp[,c(i, list)], formula = as.formula(formula))
+  
+}
+
+```
+```{r}
+
+mod_total = merge(temp, outcome[,c("Total", "formation", "stage_progressed","Team")], by.x = "team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+
+mod = lm(data = mod_total, formula = Total ~ mean_strength_intra_ww + burt_sa +  closeness_slack + gini_overall_task + strength_inter_slack + strength_org_slack)
+
+plot_model(mod, type = "std2", sort.est = TRUE, vline.color = "grey80", show.values = TRUE, value.offset = 0.3, title = "") + theme_bw(base_size = 15)
+
+
+```
+
+
+```{r}
+
+mod = lm(data = mod_total, formula = Total ~ mean_age + age_gap)
+
+plot_model(mod, type = "std2", sort.est = TRUE, vline.color = "grey80", show.values = TRUE, value.offset = 0.3, title = "") + theme_bw(base_size = 15)
+
+mod = lm(data = mod_total, formula = formation ~ mean_age + age_gap)
+
+plot_model(mod, type = "std2", sort.est = TRUE, vline.color = "grey80", show.values = TRUE, value.offset = 0.3, title = "formation") + theme_bw(base_size = 15)
+
+mod = lm(data = mod_total, formula = stage_progressed ~ mean_age + age_gap)
+
+plot_model(mod, type = "std2", sort.est = TRUE, vline.color = "grey80", show.values = TRUE, value.offset = 0.3, title = "stage_progressed") + theme_bw(base_size = 15)
+
+
+```
+
+```{r}
+
+l = x[!x %in% c("mean_presentation")]
+
+cd = corr_matrix(outcome, l, l)
+
+cd$cor[cd$p_val > 0.05] = 0
+cd$cor = round(cd$cor, 3)
+
+plt = ggplot(cd) + geom_tile(aes(x = j, y = i, fill = cor), lwd = 1.5, linetype = 1) + scale_fill_gradient2(low = "blue", high = "red") + theme_bw(base_size = 15) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) + ylab("") + xlab("") + geom_text(aes(x = j, y = i, label = cor)) + ggtitle("Multicollinearity Check") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.text.x = element_text(angle = 90))
+
+ggplotly(plt)
+
+```
+
+```{r}
+
+t = df_key_attributes[, c("team", "size", "age_gap", "background_span", "mean_education","mean_exante", "no_messages_slack", "strength_org_slack", "closeness_slack", "max_components", "mean_strength_intra_ww", "burt_sa", "degree_inter_sa", "team_activity_span", "gini_overall_task", "mean_task_per_person")]
+
+colnames(t) = c("team", "team_size", "age_gap", "background_span", "mean_education_level", "prior_sdg_experience", "activity_slack", "strength_org_slack", "closeness_slack", "fraction_component_known_before", "collaborations_intra_team", "burt_seek_advice", "degree_inter_seek_dvice", "team_activity_span", "activity_regularity", "mean_task_per_person")
+
+write.csv(t, "../processed data/correlation features.csv")
+
+t_t = merge(t, outcome, by.x = "team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+y = colnames(t)
+
+df_corr = corr_matrix(t_t, x[!x %in% c("formation")], c(y[!y %in% c("team", "new_name")]))
+
+df_corr$cor[df_corr$p_val > LoS] = NA
+df_corr$cor = round(df_corr$cor, 3)
+
+plt = ggplot(df_corr) + geom_tile(aes(x = j, y = i, fill = cor), lwd = 1.5, linetype = 1) + scale_fill_gradient2(low = "blue", high = "red", na.value = "grey90") + theme_bw(base_size = 15) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) + ylab("") + xlab("") + geom_text(aes(x = j, y = i, label = cor)) + ggtitle("Correlations") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.text.x = element_text(angle = 90, hjust = 0.95, vjust = 0.2))
+
+ggplotly(plt)
+
+ggsave(plt, filename = "../figures/correlations/siginificant_correlations.png", width = 10, height = 7)
+```
+
+
+Pre-Formed vs Algorithm
+
+
+```{r, warning=FALSE}
+
+t = merge(df_key_attributes, outcome, by.x = "team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+#t = outcome
+df_type = data.frame()
+
+for (j in colnames(t))
+{
+  if (! j %in% c("team", "Type", "new_name", "Stage", "formation", "Team"))
+  {
+    df = t[,c("Type", j)]
+    w = wilcox.test(df[df$Type == "Pre-formed",j], df[df$Type == "Algorithm",j], alternative = "two.sided")
+    stat = mean(df[df$Type == "Pre-formed",j], na.rm = TRUE) > mean(df[df$Type == "Algorithm",j], na.rm = TRUE)
+    df_type = rbind(df_type, data.frame(attribute = j, p_value = w$p.value, key = if (stat) "Pre-Formed" else "Algorithm"))
+  }
+}
+
+df_type$key[df_type$p_value > 0.1] = NA
+
+plt = ggplot(df_type, aes(y = reorder(attribute, p_value), x = p_value)) + geom_bar(stat = "identity", aes(fill = key)) + theme_bw(base_size = 15) + xlab("P Value") + ylab("") + geom_vline(xintercept = 0.1, linetype = 2, color = "red")
+
+ggplotly(plt)
+
+ggsave(plt, filename = "../figures/team_type.png", height = 10, width = 7)
+
+```
+
+```{r}
+
+write.csv(outcome, "../processed data/composite_outcome.csv")
+#write.csv(reg, "../processed data/reg_edited.csv")
+
+temp = unnest(reg, cols = c("communication"))
+temp = temp %>% select(-"birthday")
+write.csv(temp, file = "../processed data/reg_edited.csv")
+
+```
+

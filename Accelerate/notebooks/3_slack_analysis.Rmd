@@ -1,0 +1,19 @@
+---
+title: "Crowd4SDG Slack"
+output: html_notebook
+---
+
+Slack Analysis - Crowd4SDG
+
+0. Load Data/Libraries
+
+```{r}
+
+source("custom_functions.R")
+
+library("ggplot2")
+library("dplyr")
+
+load("../processed data/slack.RData")
+
+```

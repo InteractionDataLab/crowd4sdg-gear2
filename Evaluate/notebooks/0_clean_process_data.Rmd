@@ -1,0 +1,172 @@
+---
+title: "Crowd4SDG - Clean and Process Data"
+output: html_notebook
+---
+
+0. Load data files and required libraries
+
+```{r}
+
+library("jsonlite")
+library("stringr")
+library("dplyr")
+library("tidyr")
+
+reg = read.csv("../data/registration_form5_hashed.csv")
+surv = fromJSON("../data/all_surveys.json")
+
+surv = unnest(surv, cols = c("survey_answers"))
+surv = unnest(surv, cols = c("survey_fields"))
+surv = surv[grepl("Weekly", surv$survey_name),]
+
+```
+
+************************************************************
+
+1. Processing the Survey (CoSo) Responses
+
+1.1 Separate the responses into different categories - tasks, interactions, surveys
+
+```{r}
+
+questions_int = c("Who did you seek advice from last week?", "Which of these people did you know personally before?", "Who did you work with last week?")
+
+tasks = surv[surv$survey_field_id == "Which task(s) did you perform last week?",]
+interactions = surv[surv$survey_field_id %in% questions_int,]
+surveys = surv[!surv$survey_field_id %in% union(questions_int, "Which task(s) did you perform last week?"),]
+
+#Removing free text data (Feedback)
+
+surveys = surveys[!surveys$survey_field_id == "You can share here any additional comment or feedback:",]
+
+```
+
+1.2 Clean each category
+
+1.2.1 Tasks
+
+```{r}
+
+tasks = unnest(tasks, cols = c("content"))
+colnames(tasks)[colnames(tasks) == "content"] = "tasks"
+
+#write.csv(tasks, "processed_data/tasks.csv")
+
+```
+
+1.2.2 Interactions
+
+```{r}
+
+temp = data.frame()
+
+count = 0
+
+for (i in 1:nrow(interactions))
+{
+  list = interactions$content[[i]]
+  list = trimws(strsplit(list, ",")[[1]])
+  temp = rbind(temp, data.frame(user_id = interactions$user_id[i], to = list, survey_id = interactions$survey_id[i], survey_field_id = interactions$survey_field_id[i]))
+  count = count + length(list)
+}
+
+interactions = merge(select(interactions, -content), temp, by.x = c("user_id", "survey_id", "survey_field_id"), by.y = c("user_id", "survey_id", "survey_field_id"))
+
+#write.csv(interactions, "processed_data/interactions.csv")
+
+```
+
+1.2.3. Surveys
+
+```{r}
+
+surveys$survey_field_id = str_replace(surveys$survey_field_id, "<b>", "")
+surveys$survey_field_id = str_replace(surveys$survey_field_id, "</b>", "")
+surveys$survey_field_id = str_replace(surveys$survey_field_id, "</br>", " - ")
+surveys$survey_field_id = str_replace(surveys$survey_field_id, "Week 1: ", "")
+surveys$survey_field_id = str_replace(surveys$survey_field_id, "Week 2: ", "")
+
+
+surveys = unnest(surveys, cols = c("content"))
+#write.csv(surveys, "processed_data/surveys.csv")
+
+```
+
+1.3 Writing as RData (New)
+
+```{r}
+
+save(surveys, interactions, tasks, file = "../processed data/surveys.RData")
+
+```
+
+*********************************************
+
+2. Processing the Registration Form
+
+2.1 Remove "coach" responses and rename columns (Using the template from Camille)
+
+```{r}
+
+reg = reg[!reg$You.are.joining.as.a. == "Coach",]
+
+new_names = c("Timestamp", "Consent", "Firstname", "Lastname", "ID",
+"gender",
+"country_orig",
+"country_resid",
+"timezone", 
+"occupation",
+"organization_type", 
+"organization_name", 
+"education", 
+"background", 
+"type",
+"birthday",
+"communication", 
+"motivation", 
+"objective", 
+"exante_knowledge",
+"exante_data", 
+"exante_experience", 
+"exante_experience_spe", 
+"tools", 
+"tools_other", 
+"exante_project",
+"exante_project_type", 
+"exante_project_descript",
+"exante_project_SDG", 
+"exante_project_SDG_contrib",
+"exante_project_maturity", 
+"exante_project_maturity_descript", 
+"exante_project_impact", 
+"exante_project_impact_descript", 
+"team",
+"team_name", 
+"team_members",
+"team_work", 
+"team_project_idea",
+"team_project_SDG", 
+"team_project_SDG_descript", 
+"disability", 
+"disability_communication", 
+"disability_descript"
+)
+
+colnames(reg) = new_names
+
+#The communication has answers in a weird formatting
+
+reg$communication = as.character(reg$communication)
+reg$communication = lapply(reg$communication, FUN = function(x) gsub("Direct communication by friends, acquaintances, or profesionnal network", "Direct communication", x))
+  
+ 
+```
+
+2.2 Write as RData (New)
+
+```{r}
+
+save(reg, file = "../processed data/registration.RData")
+
+```
+

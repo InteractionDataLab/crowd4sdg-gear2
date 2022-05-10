@@ -1,0 +1,406 @@
+---
+title: "Crowd4SDG Slack"
+output: html_notebook
+---
+
+**** 
+TODO - Map to teams 
+****
+
+Slack Analysis - Crowd4SDG
+
+0. Load Data/Libraries
+
+```{r, message = FALSE, warning = FALSE}
+
+source("custom_functions.R")
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+load("../processed data/slack.RData")
+
+```
+
+
+1. Networks
+
+(i) Text mention networks - (Rathin: @Camille, blah blah.) - Directed edge from Rathin -> Camille
+(ii) Emoticon Responses - Camille reacted :) to Rathin's message - Directed edge Camille -> Rathin
+(iii) Bipartite user-channel
+
+*(iii) Co-mention - (Rathin: @Camille, @Marc blah blah) - Undirected clique between Rathin, Camille and Marc
+
+```{r}
+
+#(i)
+
+#Remove bulk notification (here, channel, everyone) on slack
+tm_users = text_mentions[!text_mentions$cited_user %in% c("here", "channel", "everyone"),c(2,3,1,4)]
+
+g_text_mentions = graph_from_data_frame(tm_users, vertices = users_df, directed = TRUE)
+E(g_text_mentions)$weight = 1
+
+#sample plot
+
+pdf("../figures/slack/text_mention_network.pdf")
+plt = plotNetwork(g_text_mentions)
+
+dev.off()
+
+```
+
+```{r}
+
+#(ii)
+
+g_emoticon_responses = graph_from_data_frame(emoticons[,c(4,2,1,3,5)], vertices = users_df)
+E(g_emoticon_responses)$weight = 1
+
+
+pdf("../figures/slack/emoticon_responses_network.pdf")
+plt = plotNetwork(g_emoticon_responses)
+
+dev.off()
+
+
+```
+
+```{r}
+
+#(iii)
+
+nodes = data.frame(vertices = unique(channels_members$name), type = TRUE)
+nodes = rbind(nodes, data.frame(vertices = unique(channels_members$members), type = TRUE))
+
+g_user_channel = graph_from_data_frame(channels_members[,c(2,3,1)], vertices = nodes, directed = FALSE)
+
+```
+
+2. Activity
+
+2.1 Wordclouds of Channels over time
+
+```{r}
+
+Sys.setenv(TZ="GMT")
+texts$timestamp = as.POSIXct(as.integer(texts$timestamp), origin = "1970-01-01")
+
+df_channel_activity_weekly = data.frame()
+
+for (i in unique(texts$channel))
+{
+  obj = hist(texts$timestamp[texts$channel == i], breaks = "weeks", plot = F)
+  for (j in 1:length(obj$counts))
+  {
+    df_channel_activity_weekly = rbind(df_channel_activity_weekly, data.frame(channel = i, activity = obj$counts[j], weeks = obj$breaks[j]))
+  }
+  
+}
+```
+
+
+```{r,fig.height=5, fig.width=10}
+
+library(wordcloud)
+
+list = sort(unique(df_channel_activity_weekly$weeks))
+weeks = list
+wc = list()
+
+pdf('../figures/slack/wordclouds_slack_week.pdf', 10, 10)
+
+for (i in list[1:(length(list))])
+{
+  set.seed(1234)
+
+  words = df_channel_activity_weekly$channel[df_channel_activity_weekly$weeks == i]
+  freq = df_channel_activity_weekly$activity[df_channel_activity_weekly$weeks == i]
+  
+  if(max(freq) > 0)
+    wc = wordcloud(words = words, freq = freq, min.freq = 0,max.words=100, random.order=FALSE, rot.per=0, colors=brewer.pal(8, "Dark2")) 
+}
+
+dev.off()
+
+```
+
+2.2 Activity over time - Heatmap
+
+```{r}
+
+library(harrypotter)
+
+df_channel_activity_weekly$count = df_channel_activity_weekly$activity
+df_channel_activity_weekly$order = 0
+
+for (i in unique(df_channel_activity_weekly$channel))
+{
+  temp = df_channel_activity_weekly[df_channel_activity_weekly$channel == i,]
+  df_channel_activity_weekly$count[df_channel_activity_weekly$channel == i] = (temp$count/sum(temp$count))
+  
+  peak = temp$week[which.max(temp$count)]
+  df_channel_activity_weekly$order[df_channel_activity_weekly$channel == i] = peak
+}
+
+df_channel_activity_weekly$weeks = as.POSIXct(df_channel_activity_weekly$weeks, origin = "1970-01-01")
+
+plt = ggplot(df_channel_activity_weekly) + geom_tile(aes(x = weeks, y = reorder(channel, -order), fill = count), lwd = 1.5, linetype = 1) + scale_fill_gradientn(colors = hp(n = 7, option = "Always")) + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) + ylab("") + xlab("")
+
+ggsave(plot = plt, filename = "../figures/slack/channel_activity_weekly.png", height = 7, width = 7)
+
+```
+
+
+Simple Bar with not normalized heatmap - same order
+
+Activity
+
+```{r}
+
+a = df_channel_activity_weekly %>% group_by(channel) %>% summarise(count = sum(activity))
+
+plt = ggplot(a, aes(y = reorder(channel, count), x = count)) + geom_bar(stat = "identity") + theme_bw(base_size = 20) + xlab("Activity") + ylab("") 
+
+ggsave(plt, filename = "../figures/slack/channel_activity_bar.png", width = 10, height = 10)
+
+##########################33
+
+df_channel_activity_weekly$count = df_channel_activity_weekly$activity
+df_channel_activity_weekly$order = 0
+
+for (i in unique(df_channel_activity_weekly$channel))
+{
+  temp = df_channel_activity_weekly[df_channel_activity_weekly$channel == i,]
+  #df_channel_activity_weekly$count[df_channel_activity_weekly$channel == i] = (temp$count/sum(temp$count))
+  
+  peak = temp$week[which.max(temp$count)]
+  df_channel_activity_weekly$order[df_channel_activity_weekly$channel == i] = peak
+}
+
+df_channel_activity_weekly$weeks = as.POSIXct(df_channel_activity_weekly$weeks, origin = "1970-01-01")
+
+df_channel_activity_weekly$count[df_channel_activity_weekly$count == 0] = NA
+df_channel_activity_weekly = df_channel_activity_weekly %>% group_by(channel) %>% mutate(total = sum(activity))
+
+plt = ggplot(df_channel_activity_weekly) + geom_tile(aes(x = weeks, y = reorder(channel, total), fill = count), lwd = 1.5, linetype = 1) + scale_fill_gradientn(colors = hp(n = 7, option = "Always"), na.value = "white") + theme_bw(base_size = 20) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) + ylab("") + xlab("") + geom_text(aes(x = weeks, y = reorder(channel, -order), label = count))
+
+ggsave(plot = plt, filename = "../figures/slack/channel_activity_weekly_nonor.png", height = 10, width = 10)
+
+
+
+```
+
+Acivity Overall
+
+```{r}
+
+a = df_channel_activity_weekly %>% group_by(weeks) %>% summarise(count = sum(activity))
+
+plt = ggplot(a, aes(y = count, x = weeks)) + geom_line(stat = "identity") + theme_bw(base_size = 20) + xlab("Time") + ylab("") + ggtitle("Activity over time") + geom_point(aes(x = weeks, y = count))
+
+ggsave(plt, filename = "../figures/slack/channel_activity_time.png", width = 7, height = 7)
+
+```
+
+
+3.1 User Team mapping
+
+```{r}
+library("digest")
+library(dplyr)
+
+user_map = users_df[,c("id", "real_name", "email")]
+user_map = user_map %>% rowwise() %>% mutate(email_hash = digest::digest(trimws(email), algo = "sha256", serialize = FALSE))
+
+map = read.csv("../data/team_users_hashed.csv")
+
+#user_map = merge(user_map, map[,c("EmailHash", "Team")], by.x = "email_hash", by.y = "EmailHash", all.x = TRUE)
+
+user_map = read.csv("../processed data/slack_id_verified.csv", stringsAsFactors = FALSE)
+user_map = user_map %>% drop_na()
+
+```
+
+
+Grouped Networks
+
+```{r}
+
+#Overall - mentions
+
+text_ment = merge(text_mentions, user_map[,c("id", "Team")], by.x = "message_creator", by.y = "id")
+colnames(text_ment)[colnames(text_ment) == "Team"] = "From_Team"
+
+text_ment = merge(text_ment, user_map[,c("id", "Team")], by.x = "cited_user", by.y = "id")
+colnames(text_ment)[colnames(text_ment) == "Team"] = "To_Team"
+
+text_ment$From_Team = as.character(text_ment$From_Team)
+text_ment$To_Team = as.character(text_ment$To_Team)
+text_ment[is.na(text_ment)] = "dummy"
+
+g_grouped_mentions = graph_from_data_frame(text_ment[,c("From_Team", "To_Team", "timestamp", "channel", "message_creator", "cited_user")], directed = TRUE)
+
+E(g_grouped_mentions)$weight = 1
+
+g_grouped_mentions = simplify(g_grouped_mentions, remove.loops = FALSE, remove.multiple = TRUE)
+
+V(g_grouped_mentions)$print = V(g_grouped_mentions)$name
+
+plt = visPlot(g_grouped_mentions, edgewidth = scales::rescale(E(g_grouped_mentions)$weight, to = c(1,10)), nodesize = strength(g_grouped_mentions, mode = "in"), textsize = scales::rescale(strength(g_grouped_mentions, mode = "in"), to = c(10,35)))
+
+#write.graph(g_grouped_mentions, "networks/grouped_mentions.graphml", format = "graphml")
+
+plt
+visSave(plt, '../figures/slack/network_grouped_mention.html')
+
+```
+
+
+```{r}
+#Overall - reactions
+
+reac_ment = merge(emoticons, user_map[,c("id", "Team")], by.x = "reacted_by", by.y = "id")
+colnames(reac_ment)[colnames(reac_ment) == "Team"] = "From_Team"
+
+reac_ment = merge(reac_ment, user_map[,c("id", "Team")], by.x = "message_creator", by.y = "id")
+colnames(reac_ment)[colnames(reac_ment) == "Team"] = "To_Team"
+
+reac_ment$From_Team = as.character(reac_ment$From_Team)
+reac_ment$To_Team = as.character(reac_ment$To_Team)
+reac_ment[is.na(reac_ment)] = "dummy"
+
+g_grouped_reactions = graph_from_data_frame(reac_ment[,c("From_Team", "To_Team", "timestamp", "channel", "message_creator", "reacted_by")], directed = TRUE)
+
+E(g_grouped_reactions)$weight = 1
+
+g_grouped_reactions = simplify(g_grouped_reactions, remove.loops = FALSE, remove.multiple = TRUE)
+
+V(g_grouped_reactions)$print = V(g_grouped_reactions)$name
+
+plt = visPlot(g_grouped_reactions, edgewidth = scales::rescale(E(g_grouped_reactions)$weight, to = c(1,10)), nodesize = strength(g_grouped_reactions, mode = "in"), textsize = scales::rescale(strength(g_grouped_reactions, mode = "in"), to = c(10,35)))
+
+
+plt
+
+visSave(plt, '../figures/slack/network_grouped_reactions.html')
+
+```
+
+
+Channel Level Networks
+
+```{r}
+
+library(RColorBrewer)
+
+#using all interactions
+
+net_list = list()
+j = 1
+
+df_total = text_ment[,c("message_creator", "cited_user", "From_Team", "To_Team", "channel", "timestamp")]
+colnames(df_total) = c("From", "To", "From_Team", "To_Team", "channel", "timestamp")
+df_total$type = "mention"
+
+temp = reac_ment[,c("reacted_by", "message_creator", "From_Team", "To_Team", "channel", "timestamp")]
+colnames(temp) =  c("From", "To", "From_Team", "To_Team", "channel", "timestamp")
+temp$type = "reaction"
+
+df_total = rbind(df_total, temp)
+
+teams = unique(union(df_total$From_Team, df_total$To_Team))
+listc = data.frame(team = teams, index = colorRampPalette(brewer.pal(8, "Set2"))(length(teams))) #Custom colour palette for different roles
+
+user_map$Team = as.character(user_map$Team)
+user_map[is.na(user_map)] = "dummy"
+
+user_map = merge(user_map, listc, by.x = "Team", by.y = "team", all.x = TRUE) #Final merge of all defined attributes
+
+team_channels = c("climategenderjustice", "team-water-warriors", "team-andapé-institute", "rhythm-of-bamboos", "rights-of-climate", "flood-rangers", "team-donate-water-project", "women-4-sustainable-world", "team-women-for-sustainable-world")
+
+all_channels = unique(df_total$channel)
+
+pdf('../figures/slack/plotNetworks_channels.pdf')
+#par(mfrow=c(2,1), mar=c(0,0,2,0), cex.main=3)
+
+#teams = unique(map$Team)
+
+for (i in all_channels)
+{
+  
+  subs = df_total[df_total$channel == i,]
+    
+  if(nrow(subs) > 0)
+  {
+    g_temp = graph_from_data_frame(subs, vertices = user_map[,c("id","real_name", "Team", "index")])
+  
+    #write.graph(g_temp, paste("channel_nets/", i, ".graphml", sep = ""), format = "graphml")
+  
+    E(g_temp)$weight = 1
+    g_simp_temp = simplify(g_temp, remove.multiple = TRUE, remove.loops =  FALSE)
+  
+    g_simp_temp = delete_vertices(g_simp_temp, v = V(g_simp_temp)[degree(g_simp_temp) == 0])
+    
+    V(g_simp_temp)$Name = V(g_simp_temp)$Team
+  
+    net_list[[j]] = g_simp_temp
+    
+    j = j + 1
+    
+    plotNetwork(g_simp_temp, main = i, coms = V(g_simp_temp)$index, label = V(g_simp_temp)$Name, colors = TRUE)
+  }
+}
+
+dev.off()
+
+
+```
+
+Grouped Total
+
+```{r}
+
+g_total = graph_from_data_frame(df_total[,c(3,4,1,2,5:7)], directed = TRUE)
+E(g_total)$weight = 1
+g_total_simp = simplify(g_total, remove.loops = FALSE)
+
+plt = visPlot(g_total_simp, edgewidth = scales::rescale(E(g_total_simp)$weight, to = c(1,10)), nodesize = strength(g_total_simp, mode = "in"), textsize = scales::rescale(strength(g_total_simp, mode = "in"), to = c(10,35)))
+
+visSave(plt, '../figures/slack/network_grouped_total.html')
+
+```
+
+
+Density order networks
+
+```{r}
+
+
+pdf('../figures/slack/plotNetworks_ordered.pdf')
+par(mfrow=c(5,4), mar=c(0,0,2,0), cex.main=3)
+
+ordered = order(sapply(net_list, edge_density))
+names(net_list) = all_channels
+
+for (i in ordered)
+{
+  g = net_list[[i]]
+  
+  plotNetwork(g, main = names(net_list)[i], coms = V(g)$index, colors = TRUE)
+  
+}
+
+```
+
+```{r}
+
+texts = merge(texts, user_map[,c("id", "Team")], by.x = "user", by.y = "id", all.x = TRUE)
+
+save(df_total, texts, file = "../processed data/slack_all_int.RData")
+
+```
+

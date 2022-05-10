@@ -1,0 +1,99 @@
+---
+title: "Crowd4SDG Reg. Form - Gear 2"
+output: html_notebook
+---
+
+```{r}
+
+library(ggplot2)
+
+source("custom_functions.R")
+
+load("../processed data/registration.RData")
+
+```
+
+Bar Plots
+
+```{r}
+
+reg$age = floor(as.numeric(difftime(as.Date("2022-04-01"), as.Date(reg$birthday, tryFormats = c("%m/%d/%Y")), unit="weeks"))/52.25)
+
+fields = c("gender" = "gender", "country of origin" = "country_orig", "country of residence" = "country_resid", "background" = "background", "communication" = "communication", "exante_data" = "exante_data", "tools" = "tools", "exante_knowledge" = "exante_knowledge", "exante_project_type" = "exante_project_type", "exante_project_sdg" = "exante_project_SDG", "team_project_sdg" = "team_project_SDG","occupation" = "occupation")
+
+#fields = c(6,7,8,13,14,17,21,24,27,29,40)
+
+pdf("../figures/bars_registration.pdf", width = 20, height = 10)
+
+for (i in fields)
+{
+  temp = reg[,c("ID", i)]
+  proc = clean_split_mcq(temp)
+  
+  plt = ggplot(proc[!is.na(proc$variable),], aes(y = forcats::fct_rev(forcats::fct_infreq(variable)))) + geom_bar(stat = "count", width = 0.9) + theme_minimal(base_size = 25) + xlab("Count") + theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank()) + ylab(names(fields[fields == i])) + geom_text(stat='count', aes(label=..count..), size = 6, hjust=-1)
+  
+  print(plt)
+  
+}
+
+dev.off()
+
+```
+
+Bipartite Networks
+
+```{r}
+
+pdf("../figures/proj_net_registration.pdf")
+
+for (i in fields[4:12])
+{
+  temp = reg[,c("ID", i)]
+  proc = clean_split_mcq(temp)
+  proj = biproj_custom(proc)
+  
+  plotNetwork(proj[[1]], maine = i, label = V(proj[[1]])$names)
+}
+
+dev.off()
+
+```
+
+Age Distribution
+
+```{r}
+
+temp = reg[,c("ID", "age")]
+  
+plt = ggplot(temp, aes(x = sort(age))) + geom_bar(stat = "count", width = 0.9) + theme_bw(base_size = 25) + xlab("Count") + ylab(" ") + theme(axis.line = element_line(colour = "black"), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) +  geom_text(stat='count', aes(label=..count..), vjust=-1) + xlab("Age") + ggtitle("Participant Age Distribution")
+  
+print(plt)
+
+ggsave(plt, filename = "../figures/reg_age.png", width = 7, height = 7)
+
+```
+
+By Team
+
+```{r}
+
+map = read.csv("../data/team_users_hashed.csv")
+
+temp = merge(temp, map, by.x = "ID", by.y = "EmailHash", all.x = TRUE)
+
+reg_map = c("A2: Women & Technology Against Climate Change" = "T6: Women & Technology Against Climate Change", "B2: TEAM FOILED" = "T3: TEAM FOILED", "C1: Andapé Institute" = "T13: Andapé Institute", "C3: WOMER" = "T5: WOMER", "A5: Donate Water Project" = "T9: DonateWater", "B5: Rights of Climate" = "T11: Rights of Climate", "B3: Eco Winners" = "T14: Eco Winners", "B4: Women 4 Sustainable World" = "T12: Women 4 Sustainable World", "A1: Up Get App/CitiCERN" = "T7: UpGet app - CitiCERN Project", "B1: Water Warriors" = "T10: Water Warriors", "C2: PAM" = "T4: PAM", "C4: Climate Gender Justice" = "T8: Climate Gender Justice", "A3: Rhythm of Bamboos" = "T1: SDesiGn (Old name: Rhythm of Bamboos)", "C5: Ashifa Nazrin" = "C5: Ashifa Nazrin", "A4: Flood Rangers" = "T2: Flood Rangers")
+
+reg_map = data.frame(old_name = names(reg_map), new_name = reg_map)
+
+temp = merge(temp, reg_map, by.x = "Team", by.y = "old_name", all.x = TRUE)
+
+plt = ggplot(temp, aes(x = new_name, y = age)) + geom_boxplot() + theme_bw(base_size = 20) + xlab("") + ylab("Age") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + geom_point(aes(x = new_name, y = age), alpha = 0.2)
+ggplotly(plt)
+
+ggsave("../figures/age_by_team.png", height = 12, width = 7)
+
+```
+

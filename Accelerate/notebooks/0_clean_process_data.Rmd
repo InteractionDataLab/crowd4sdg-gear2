@@ -1,0 +1,122 @@
+---
+title: "Crowd4SDG - Clean and Process Data"
+output: html_notebook
+---
+
+0. Load data files and required libraries
+
+```{r}
+
+library("jsonlite")
+library("stringr")
+library("dplyr")
+library("tidyr")
+
+#reg = read.csv("../data/registration_form5_hashed.csv")
+surv = fromJSON("../data/all_surveys.json")
+
+surv = unnest(surv, cols = c("survey_answers"))
+surv = unnest(surv, cols = c("survey_fields"))
+surv = surv[grepl("Accelerate", surv$survey_name),]
+
+```
+
+************************************************************
+
+1. Processing the Survey (CoSo) Responses
+
+1.1 Separate the responses into different categories - tasks, interactions, surveys
+
+```{r}
+
+
+questions_int = c("Who did you work with since the previous block?", "Who did you seek advice from during the previous block?")
+
+tasks = surv[surv$survey_field_id == "Which task(s) did you perform since the previous block?",]
+interactions = surv[surv$survey_field_id %in% questions_int,]
+
+agr_disagr = c("<b>Teamwork / collaboration</b></br>I am able to efficiently collaborate in a team.", "<b>Communication</b></br>I am able to communicate my ideas or projects clearly and concisely.", "<b>Problem solving</b></br>I am able to find solutions to challenges my problem is facing through brainstorming, prototyping, and / or engaging with stakeholders.", "<b>Leadership / self-confidence</b></br>I feel confident in being able to launch my project.")
+
+surveys = surv[!surv$survey_field_id %in% union(questions_int, "Which task(s) did you perform since the previous block?"),]
+
+#Removing free text data (Feedback)
+
+surveys = surveys[!surveys$survey_field_id %in% union(agr_disagr, "What went especially well, or what could have gone better and how? Any other comments welcome too."),]
+surveys_agr = surv[surv$survey_field_id %in% agr_disagr,]
+
+
+```
+
+1.2 Clean each category
+
+1.2.1 Tasks
+
+```{r}
+
+tasks = unnest(tasks, cols = c("content"))
+colnames(tasks)[colnames(tasks) == "content"] = "tasks"
+
+#write.csv(tasks, "processed_data/tasks.csv")
+
+```
+
+1.2.2 Interactions
+
+```{r}
+
+temp = data.frame()
+
+count = 0
+
+for (i in 1:nrow(interactions))
+{
+  list = interactions$content[[i]]
+  list = trimws(strsplit(list, ",")[[1]])
+  temp = rbind(temp, data.frame(user_id = interactions$user_id[i], to = list, survey_id = interactions$survey_id[i], survey_field_id = interactions$survey_field_id[i]))
+  count = count + length(list)
+}
+
+interactions = merge(select(interactions, -content), temp, by.x = c("user_id", "survey_id", "survey_field_id"), by.y = c("user_id", "survey_id", "survey_field_id"))
+
+#write.csv(interactions, "processed_data/interactions.csv")
+
+```
+
+1.2.3. Surveys
+
+```{r}
+
+surveys$survey_field_id = str_replace(surveys$survey_field_id, "<b>", "")
+surveys$survey_field_id = str_replace(surveys$survey_field_id, "</b>", "")
+surveys$survey_field_id = str_replace(surveys$survey_field_id, "</br>", " - ")
+surveys$survey_field_id = str_replace(surveys$survey_field_id, "Week 1: ", "")
+surveys$survey_field_id = str_replace(surveys$survey_field_id, "Week 2: ", "")
+
+
+surveys = unnest(surveys, cols = c("content"))
+#write.csv(surveys, "processed_data/surveys.csv")
+
+```
+
+```{r}
+
+surveys_agr$survey_field_id = str_replace(surveys_agr$survey_field_id, "<b>", "")
+surveys_agr$survey_field_id = str_replace(surveys_agr$survey_field_id, "</b>", "")
+surveys_agr$survey_field_id = str_replace(surveys_agr$survey_field_id, "</br>", " - ")
+surveys_agr$survey_field_id = str_replace(surveys_agr$survey_field_id, "Week 1: ", "")
+surveys_agr$survey_field_id = str_replace(surveys_agr$survey_field_id, "Week 2: ", "")
+
+
+surveys_agr = unnest(surveys_agr, cols = c("content"))
+#write.csv(surveys, "processed_data/surveys.csv")
+
+```
+
+
+1.3 Writing as RData (New)
+
+```{r}
+
+save(surveys, surveys_agr, interactions, tasks, file = "../processed data/surveys.RData")
+
+```

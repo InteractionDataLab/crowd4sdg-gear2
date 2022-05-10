@@ -1,0 +1,293 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+
+library(ggplot2)
+library(dplyr)
+library(stringr)
+
+final = read.csv("../data/final_form_accelerate.csv")
+
+map = read.csv("../data/team_users_hashed.csv")
+colnames(map) = c("Team", "ID", "Hash", "Mentors")
+
+source("custom_functions.R")
+
+load("../processed data/registration.RData")
+
+```
+
+```{r}
+
+#colnames(final) = gsub("\\.", " ", colnames(final))
+questions = colnames(final)
+
+which_extent = questions[grepl("To.which.extend",questions)]
+what_communication = questions[grepl("What.communication", questions)]
+did_issues = questions[grepl("Did.you.have.issues", questions)]
+how_often = questions[grepl("How.often", questions)]
+
+exante = c("What.statements.are.correct..Select.all.that.apply.", "How.can.citizen.scientists.help.produce.data.on.the.status.of.SDGs.")
+
+```
+
+On with the Plots!
+
+which_extent
+
+```{r}
+
+list = c("Strongly disagree" = -2, "Disagree" = -1, "Neither disagree or agree" = 0, "Agree" = 1, "Strongly agree" = 2)
+
+temp = final[,c("Username", "What.is.your.team.", which_extent)]
+temp = reshape2::melt(temp, id = c("Username", "What.is.your.team."))
+
+temp$value = factor(temp$value, levels = c("Strongly disagree", "Disagree", "Neither disagree or agree", "Agree", "Strongly agree"))
+temp$score = list[temp$value]
+
+temp$variable = str_replace(temp$variable, "To.which.extend.do.you.agree.to.the.following.statements...", "")
+temp$variable = gsub("\\.", " ", temp$variable)
+
+temp_compr = temp %>% group_by(variable) %>% summarise(mean = mean(score, na.rm = TRUE), se = se(score))
+#temp_compr$variable = gsub("\\.", " ", temp_compr$variable)
+
+plt = ggplot(temp_compr[!grepl("since I participated", temp_compr$variable),], aes(x = mean, y = reorder(variable, mean))) + geom_point() + theme_bw(base_size = 15) + geom_errorbar(aes(xmin = mean-se, xmax = mean+se), width = 0) + xlab("Response Score") + ylab("Questions") + ggtitle("To which extend do you agree to the following statements") + scale_x_continuous(labels=names(list), breaks=-2:2, limits=c(-2,2))+ xlab("Scores")
+
+ggsave(plt, filename = "../figures/which_extent_1.png", height = 7, width = 20)
+
+
+#plt = ggplot(temp[!grepl("since.I.participated", temp$variable),], aes(x = score, y = reorder(variable, score))) + geom_boxplot() + geom_point(aes(x = score, y = reorder(variable, score))) + theme_bw(base_size = 15) + xlab("Response Score") + ylab("Questions") + ggtitle("To which extend do you agree to the following statements") + scale_x_continuous(labels=names(list), breaks=-2:2, limits=c(-2,2))+ xlab("Scores")
+
+###############################
+
+temp_compr$y_new = str_replace(temp_compr$variable, "since I participated in the CBIW  ", "")
+
+plt = ggplot(temp_compr[grepl("since I participated", temp_compr$variable),], aes(x = mean, y = reorder(y_new, mean))) + geom_point() + theme_bw(base_size = 15) + geom_errorbar(aes(xmin = mean-se, xmax = mean+se), width = 0) + xlab("Response Score") + ylab("Questions") + ggtitle("To which extend do you agree to the following statements") + scale_x_continuous(labels=names(list), breaks=-2:2, limits=c(-2,2))+ xlab("Scores")
+
+ggsave(plt, filename = "../figures/which_extent_2.png", height = 7, width = 20)
+
+w_e = temp
+
+```
+
+
+Heatmap
+
+```{r}
+
+temp_agg = temp %>% group_by(variable, value) %>% summarise(count = n())
+
+temp_agg$value = factor(temp_agg$value, levels = c("Strongly disagree", "Disagree", "Neither disagree nor agree", "Agree", "Strongly agree"))
+#temp_agg$variable = gsub("\\.", " ", temp_agg$variable)
+
+plt = ggplot(temp_agg[!is.na(temp_agg$value) & !grepl("since I participated", temp_agg$variable),]) + geom_tile(aes(x = value, y = variable, fill = count), lwd = 1.5, linetype = 1) + scale_fill_gradientn(colors = hp(n = 5, option = "Always")) + theme_bw(base_size = 25) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.text.x = element_text(angle = 90, vjust=0.5, hjust=1)) + ylab("") + xlab("") + scale_x_discrete(drop = FALSE) + geom_text(aes(x = value, y = variable, label = count), color = "white", size = 12)
+
+ggsave(plt, filename = "../figures/survey_which_extent_heatmap_1.png", height = 10, width = 25)
+#ggplotly(plt)
+
+temp_agg$y_new = str_replace(temp_agg$variable, "since I participated in the CBIW  ", "")
+
+plt = ggplot(temp_agg[!is.na(temp_agg$value) & grepl("since I participated", temp_agg$variable),]) + geom_tile(aes(x = value, y = y_new, fill = count), lwd = 1.5, linetype = 1) + scale_fill_gradientn(colors = hp(n = 5, option = "Always")) + theme_bw(base_size = 25) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.text.x = element_text(angle = 90, vjust=0.5, hjust=1)) + ylab("") + xlab("") + scale_x_discrete(drop = FALSE) + geom_text(aes(x = value, y = y_new, label = count), color = "white", size = 12)
+
+ggsave(plt, filename = "../figures/survey_which_extent_heatmap_2.png", height = 10, width = 25)
+
+
+```
+
+what_communication
+
+```{r}
+
+list = c("Never" = 0, "Rarely" = 1, "Sometimes" = 2, "Often" = 3, "Always" = 4)
+
+temp = final[,c("Username", "What.is.your.team.", what_communication)]
+temp = reshape2::melt(temp, id = c("Username", "What.is.your.team."))
+
+temp = temp[!temp$value == "",]
+
+temp$value = factor(temp$value, levels =  c("Never", "Rarely", "Sometimes", "Often", "Always"))
+temp$score = list[temp$value]
+
+temp$variable = str_replace(temp$variable, "What.communication.tool.s..did.you.use.during.CBIW...", "")
+temp$variable = gsub("\\.", " ", temp$variable)
+
+temp_compr = temp %>% group_by(variable) %>% summarise(mean = mean(score, na.rm = TRUE), se = se(score))
+
+plt = ggplot(temp_compr, aes(x = mean, y = reorder(variable, mean))) + geom_point() + theme_bw(base_size = 15) + geom_errorbar(aes(xmin = mean-se, xmax = mean+se), width = 0)  + ylab("Questions") + ggtitle("What communication tools did you use during CBIW") + scale_x_continuous(labels=names(list), breaks=0:4, limits=c(0,4))+ xlab("Scores")
+
+ggsave(plt, filename = "../figures/what_communication.png", height = 7, width = 15)
+
+w_c = temp
+
+```
+
+
+
+Heatmap
+
+```{r}
+
+temp_agg = temp %>% group_by(variable, value) %>% summarise(count = n())
+
+temp_agg$value = factor(temp_agg$value, levels = c("Never", "Rarely", "Sometimes", "Often", "Always"))
+
+plt = ggplot(temp_agg[!is.na(temp_agg$value),]) + geom_tile(aes(x = value, y = variable, fill = count), lwd = 1.5, linetype = 1) + scale_fill_gradientn(colors = hp(n = 7, option = "Always")) + theme_bw(base_size = 25) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ylab("") + xlab("") + scale_x_discrete(drop = FALSE) + geom_text(aes(x = value, y = variable, label = count), color = "white", size = 12)
+
+ggsave(plt, filename = "../figures/survey_what_communication_heatmap.png", height = 10, width = 10)
+#ggplotly(plt)
+
+```
+
+did_issues
+
+```{r}
+
+list = c("Never" = 0, "Rarely" = 1, "Sometimes" = 2, "Often" = 3, "Always" = 4)
+
+temp = final[,c("Username", "What.is.your.team.", did_issues)]
+temp = reshape2::melt(temp, id = c("Username", "What.is.your.team."))
+
+temp = temp[!temp$value == "",]
+
+temp$value = factor(temp$value, levels =  c("Never", "Rarely", "Sometimes", "Often", "Always"))
+temp$score = list[temp$value]
+
+temp$variable = str_replace(temp$variable, "Did.you.have.issues.connecting.with.any.of.the.platforms.used.during.CBIW...", "")
+temp$variable = gsub("\\.", " ", temp$variable)
+
+temp_compr = temp %>% group_by(variable) %>% summarise(mean = mean(score, na.rm = TRUE), se = se(score))
+
+plt = ggplot(temp_compr, aes(x = mean, y = reorder(variable, mean))) + geom_point() + theme_bw(base_size = 15) + geom_errorbar(aes(xmin = mean-se, xmax = mean+se), width = 0) + ylab("Questions") + ggtitle("Did you have issues connecting with any of the platforms used during CBIW") + scale_x_continuous(labels=names(list), breaks=0:4, limits=c(0,4))+ xlab("Scores")
+
+ggsave(plt, filename = "../figures/did_issues.png", height = 7, width = 10)
+
+d_i = temp
+
+```
+
+Heatmap
+
+```{r}
+
+temp_agg = temp %>% group_by(variable, value) %>% summarise(count = n())
+
+temp_agg$value = factor(temp_agg$value, levels = c("Never", "Rarely", "Sometimes", "Often", "Always"))
+
+plt = ggplot(temp_agg[!is.na(temp_agg$value),]) + geom_tile(aes(x = value, y = variable, fill = count), lwd = 1.5, linetype = 1) + scale_fill_gradientn(colors = hp(n = 7, option = "Always")) + theme_bw(base_size = 25) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ylab("") + xlab("") + scale_x_discrete(drop = FALSE) + geom_text(aes(x = value, y = variable, label = count), color = "white", size = 12)
+
+ggsave(plt, filename = "../figures/survey_did_issues_heatmap.png", height = 10, width = 10)
+#ggplotly(plt)
+
+```
+
+how_often
+
+```{r}
+
+list = c("Never" = 0, "Less than once a week" = 1, "Once a week" = 2, "Two to three times a week" = 3, "Four times or more a week" = 4)
+
+temp = final[,c("Username", "What.is.your.team.", how_often)]
+temp = reshape2::melt(temp, id = c("Username", "What.is.your.team."))
+
+temp = temp[!temp$value == "",]
+
+temp$value = factor(temp$value, levels =  c("Never", "Less than once a week", "Once a week", "Two to three times a week", "Four times or more a week"))
+temp$score = list[temp$value]
+
+temp$variable = str_replace(temp$variable, "How.often.did.you.connect.with.these.people.for.feedback.and.support.for.your.team.project...", "")
+temp$variable = gsub("\\.", " ", temp$variable)
+
+temp_compr = temp %>% group_by(variable) %>% summarise(mean = mean(score, na.rm = TRUE), se = se(score))
+
+plt = ggplot(temp_compr, aes(x = mean, y = reorder(variable, mean))) + geom_point() + theme_bw(base_size = 15) + geom_errorbar(aes(xmin = mean-se, xmax = mean+se), width = 0) + ylab("Questions") + ggtitle("How often did you connect with these people for feedback and support for your team project") + scale_x_continuous(labels=names(list), breaks=0:4, limits=c(0,4)) + xlab("Scores")
+
+ggsave(plt, filename = "../figures/how_often.png", height = 7, width = 10)
+
+h_o = temp
+
+```
+
+Heatmap
+
+```{r}
+
+temp_agg = temp %>% group_by(variable, value) %>% summarise(count = n())
+
+temp_agg$value = factor(temp_agg$value, levels = c("Never", "Less than once a week", "Once a week", "Two to three times a week", "Four times or more a week"))
+
+plt = ggplot(temp_agg[!is.na(temp_agg$value),]) + geom_tile(aes(x = value, y = variable, fill = count), lwd = 1.5, linetype = 1) + scale_fill_gradientn(colors = hp(n = 7, option = "Always")) + theme_bw(base_size = 25) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) + ylab("") + xlab("") + scale_x_discrete(drop = FALSE) + geom_text(aes(x = value, y = variable, label = count), color = "white", size = 12)
+
+ggsave(plt, filename = "../figures/survey_how_often_heatmap.png", height = 10, width = 10)
+#ggplotly(plt)
+
+```
+
+Additional Questions
+
+overall_satisfaction
+
+```{r}
+
+list = c("Very dissatisfied" = 0, "Dissatisfied" = 1, "Neither dissatisfied or satisfied" = 2, "Satisfied" = 1, "Very satisfied" = 2)
+
+feedback = "Please.rate.your.overall.satisfaction.with.the.quality.of.the.CBIW"
+
+temp = final[,c("Username", "What.is.your.team.", feedback)]
+temp = reshape2::melt(temp, id = c("Username", "What.is.your.team."))
+
+temp = temp[!temp$value == "",]
+
+temp$value = factor(temp$value, levels =  c("Very dissatisfied", "Dissatisfied", "Neither dissatisfied or satisfied", "Satisfied", "Very satisfied"))
+
+plt = ggplot(temp, aes(y = value)) + geom_bar(stat = "count") + theme_bw(base_size = 15) + xlab("Response Score") + ylab("Questions")  + ggtitle("Satisfaction with the quality of the CBIW") + scale_y_discrete(drop = FALSE)
+
+ggsave(plt, filename = "../figures/satisfaction.png", height = 7, width = 10)
+
+sat = temp
+
+```
+
+crowd_sourcing_tools - Network
+
+```{r}
+
+tools = "Which.of.the.following.crowd.sourcing.tools.did.you.use.for.your.project..Select.all.that.apply."
+
+temp = final[,c("Username", "What.is.your.team.", tools)]
+temp = reshape2::melt(temp, id = c("Username", "What.is.your.team."))
+
+temp = temp[!temp$value == "",]
+
+df_tools = data.frame()
+
+for (i in 1:nrow(temp))
+{
+  list = trimws(strsplit(as.character(temp$value[[i]]), ";")[[1]])
+  df_tools = rbind(df_tools, data.frame(user = temp$Username[1], team = temp$What.is.your.team.[i], tools = list))
+}
+
+vertices = data.frame(node = unique(temp$What.is.your.team.), type = TRUE)
+vertices = rbind(vertices, data.frame(node = unique(df_tools$tools), type = FALSE))
+
+g_tools = graph_from_data_frame(df_tools[,c(2,3,1)], vertices = vertices)
+E(g_tools)$weight = 1
+
+g_tools_simp = simplify(g_tools)
+
+visPlot(g_tools_simp, textsize = 2*strength(g_tools_simp), directed = TRUE, nodesize = strength(g_tools_simp), edgewidth = E(g_tools_simp)$weight, communities = V(g_tools_simp)$type+0)
+
+cs_tools = temp
+
+```
+
+```{r}
+
+ext = final[,c("Username", "What.is.your.team.", exante)]
+
+save(cs_tools, sat, d_i, w_e, w_c, h_o, ext, file = "../processed data/comparison_accelerate.RData")
+
+```
+

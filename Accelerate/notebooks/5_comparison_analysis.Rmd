@@ -1,0 +1,456 @@
+---
+title: "Comparing Answers"
+output: html_notebook
+---
+
+Comparing Responses from Initial, evaluate and Accelerate
+
+0. Load data
+
+```{r}
+
+library(dplyr)
+library(plotly)
+library(ggplot2)
+library(wesanderson)
+
+source("custom_functions.R")
+
+registration = load("../processed data/registration.RData")
+
+load("../../Evaluate/processed data/comparison_evaluate.RData",  temp_env <- new.env())
+evaluate <- as.list(temp_env)
+
+load("../processed data/comparison_accelerate.RData",  temp_env <- new.env())
+accelerate = as.list(temp_env)
+
+map = read.csv("../data/team_users_hashed.csv")
+colnames(map) = c("Team", "ID", "Hash", "Mentors")
+
+reg = merge(reg, map[,c("Team", "Hash")], by.x = "ID", by.y = "Hash")
+
+
+reg_map = c("A2: Women & Technology Against Climate Change" = "T6: Women & Technology Against Climate Change", "B2: TEAM FOILED" = "T3: TEAM FOILED", "C1: Andapé Institute" = "T13: Andapé Institute", "C3: WOMER" = "T5: WOMER", "A5: Donate Water Project" = "T9: DonateWater", "B5: Rights of Climate" = "T11: Rights of Climate", "B3: Eco Winners" = "T14: Eco Winners", "B4: Women 4 Sustainable World" = "T12: Women 4 Sustainable World", "A1: Up Get App/CitiCERN" = "T7: UpGet app - CitiCERN Project", "B1: Water Warriors" = "T10: Water Warriors", "C2: PAM" = "T4: PAM", "C4: Climate Gender Justice" = "T8: Climate Gender Justice", "A3: Rhythm of Bamboos" = "T1: SDesiGn (Old name: Rhythm of Bamboos)", "C5: Ashifa Nazrin" = "C5: Ashifa Nazrin", "A4: Flood Rangers" = "T2: Flood Rangers")
+
+reg_map = data.frame(old_name = names(reg_map), new_name = reg_map)
+reg = merge(reg, reg_map, by.x = "Team", by.y = "old_name", all.x = TRUE)
+
+```
+
+1. Learning "Exante" questions
+
+two questions with multiple correct answers. Counting - one point for a correct answer. 0 for wrong
+
+(Correct Team Names)
+
+```{r}
+library(tidyr)
+
+correct_k = c("National Statistical Offices have reservations on the use of citizen science data due to quality considerations.", "Impartiality (independence) and confidentiality are among key principles for official national data producers.")
+
+correct_d = c("Collect data", "Analyze data","Share own data")
+
+temp_reg = reg[,c("exante_knowledge", "exante_data", "Team", "ID")]
+temp_reg = reshape2::melt(temp_reg, id = c("Team", "ID"))
+
+temp_reg = temp_reg %>% rowwise() %>% mutate(answers = list(trimws(strsplit(value, ",")[[1]]))) %>% mutate(correct =  if (variable == "exante_knowledge") sum(answers %in% correct_k)/length(correct_k) else sum(answers %in% correct_d)/length(correct_d), hyper = if (variable == "exante_knowledge") phyper(sum(answers %in% correct_k), 2, 2, length(answers), lower.tail = FALSE) else phyper(sum(answers %in% correct_d), 3, 1, length(answers), lower.tail = FALSE))
+
+  #mutate(correct = if ((sum(answers %in% correct_k) == length(answers) & length(answers) == 2) || (sum(answers %in% correct_d) == length(answers) & length(answers) == 3)) 1  else 0)
+
+temp_reg$type = "registration"
+
+temp_evaluate = as.data.frame(evaluate["ext"])
+colnames(temp_evaluate) = c("ID", "Team", "exante_knowledge", "exante_data")
+temp_evaluate = reshape2::melt(temp_evaluate, id = c("Team", "ID"))
+
+temp_evaluate = temp_evaluate %>% rowwise() %>% mutate(answers = list(trimws(strsplit(value, ";")[[1]]))) %>% mutate(correct =  if (variable == "exante_knowledge") sum(answers %in% correct_k)/length(correct_k) else sum(answers %in% correct_d)/length(correct_d), hyper = if (variable == "exante_knowledge") phyper(sum(answers %in% correct_k), 2, 2, length(answers), lower.tail = FALSE) else phyper(sum(answers %in% correct_d), 3, 1, length(answers), lower.tail = FALSE))
+
+#mutate(correct = if ((sum(answers %in% correct_k) == length(answers) & length(answers) == 2) || (sum(answers %in% correct_d) == length(answers) & length(answers) == 3)) 1  else 0)
+
+temp_evaluate$type = "evaluate"
+
+temp_accelerate = as.data.frame(accelerate["ext"])
+colnames(temp_accelerate) = c("ID", "Team", "exante_knowledge", "exante_data")
+temp_accelerate = reshape2::melt(temp_accelerate, id = c("Team", "ID"))
+
+temp_accelerate = temp_accelerate %>% rowwise() %>% mutate(answers = list(trimws(strsplit(value, ";")[[1]]))) %>% mutate(correct =  if (variable == "exante_knowledge") sum(answers %in% correct_k)/length(correct_k) else sum(answers %in% correct_d)/length(correct_d), hyper = if (variable == "exante_knowledge") phyper(sum(answers %in% correct_k), 2, 2, length(answers), lower.tail = FALSE) else phyper(sum(answers %in% correct_d), 3, 1, length(answers), lower.tail = FALSE))
+  
+  #mutate(correct = if ((sum(answers %in% correct_k) == length(answers) & length(answers) == 2) || (sum(answers %in% correct_d) == length(answers) & length(answers) == 3)) 1  else 0)
+
+temp_accelerate$type = "accelerate"
+
+```
+
+
+```{r}
+
+df = rbind(temp_reg, temp_evaluate, temp_accelerate)
+df$type = factor(df$type, levels = c("registration", "evaluate", "accelerate"))
+
+df1 = df[,c("type", "variable", "hyper")] %>% group_by(variable, type) %>% summarise(mean = mean(hyper), se = se(hyper))
+
+plt = ggplot(df1, aes(x = type, y = mean, color = variable, group = variable)) + geom_line() + geom_errorbar(aes(ymin = mean-se, ymax = mean+se), width = 0) + theme_bw(base_size = 20) + ylab("HypG P-Value") + xlab("")
+
+ggsave(plt, file = "../figures/exante_compare_hypg.png", height = 7, width = 7)
+
+#****#
+
+df1 = df[,c("type", "variable", "correct")] %>% group_by(variable, type) %>% summarise(mean = mean(correct), se = se(correct))
+
+df1$variable = as.character(df1$variable)
+df1$variable[df1$variable == "exante_data"] = "Data production by citizen scientists"
+df1$variable[df1$variable == "exante_knowledge"] = "Knowledge on citizen science data"
+
+plt = ggplot(df1, aes(x = type, y = mean, color = variable, group = variable)) + geom_line() + geom_errorbar(aes(ymin = mean-se, ymax = mean+se), width = 0) + theme_bw(base_size = 20) + xlab("") + ylab("Proportion Correct Answer") + theme(legend.title = element_blank())
+
+ggsave(plt, file = "../figures/exante_compare.png", height = 7, width = 10)
+
+
+
+```
+
+
+2. Tools and Learning about tools
+
+```{r}
+library(fmsb)
+
+re_tools = reg[,c("ID", "Team", "tools")]
+re_tools$tools = as.character(re_tools$tools)
+re_tools = re_tools %>% rowwise() %>% mutate(tools = list(trimws(strsplit(tools, ",")[[1]])))
+re_tools = unnest(re_tools, cols = c("tools"))
+re_tools$type = "registration"
+
+el_tools = as.data.frame(evaluate["cs_tools"])
+colnames(el_tools) = c("ID", "Team", "variable", "tools")
+el_tools = el_tools[] %>% rowwise() %>% mutate(tools = list(trimws(strsplit(tools, ";")[[1]]))) %>% select(-variable)
+el_tools = unnest(el_tools, cols = c("tools"))
+el_tools$type = "evaluate"
+
+ac_tools = as.data.frame(accelerate["cs_tools"])
+colnames(ac_tools) = c("ID", "Team", "variable", "tools")
+ac_tools = ac_tools[] %>% rowwise() %>% mutate(tools = list(trimws(strsplit(tools, ";")[[1]]))) %>% select(-variable)
+ac_tools = unnest(ac_tools, cols = c("tools"))
+ac_tools$type = "accelerate"
+
+```
+
+Radar Plot - All teams
+
+```{r}
+
+re_tools = merge(re_tools, reg_map, by.x = "Team", by.y = "old_name", all.x = TRUE)
+re_tools$Team = re_tools$new_name
+
+re_tools = re_tools %>% select(-new_name)
+
+tools = rbind(re_tools, el_tools, ac_tools)
+tools$tools[tools$tools == "None of the above"] = "None"
+
+temp = tools %>% group_by(tools, type) %>% summarise(count = n())
+temp = temp %>% group_by(type) %>% mutate(count = count/sum(count))
+temp = reshape2::acast(temp, type~tools)
+temp[is.na(temp)] = 0
+
+temp = rbind(rep(1, ncol(temp)), rep(0,ncol(temp)), temp)
+temp = as.data.frame(temp)
+
+colors_border=c( rgb(0.2,0.5,0.5,0.9), rgb(0.8,0.2,0.5,0.9) , rgb(0.7,0.5,0.1,0.9) )
+colors_in=c( rgb(0.2,0.5,0.5,0.4), rgb(0.8,0.2,0.5,0.4) , rgb(0.7,0.5,0.1,0.4) )
+
+pdf("../figures/radar_stage.pdf", paper="a4r", width=10, height=10)
+
+radarchart( as.data.frame(temp), axistype=1 , 
+    #custom polygon
+    pcol=colors_border , pfcol=colors_in , plwd=4 , plty=1,
+    #custom the grid
+    cglcol="grey", cglty=1, axislabcol="grey", cglwd=0.8,
+    #custom labels
+    vlcex=1.5 
+    )
+
+legend(x=1.2, y=1, legend = rownames(temp[c(5,4,3),]), bty = "n", pch=20 , col=colors_in[c(3,2,1)] , text.col = "grey", cex=1.2, pt.cex=3)
+
+dev.off()
+
+```
+Only Teams in Accelerate
+
+```{r}
+
+temp = tools[tools$Team %in% unique(tools$Team[tools$type == "accelerate"]),]
+temp = temp %>% group_by(tools, type) %>% summarise(count = n())
+
+temp = temp %>% group_by(type) %>% mutate(count = count/sum(count)) 
+temp = reshape2::acast(temp, type~tools)
+temp[is.na(temp)] = 0
+
+temp = rbind(rep(1, ncol(temp)), rep(0,ncol(temp)), temp)
+temp = as.data.frame(temp)
+
+colors_border=c( rgb(0.2,0.5,0.5,0.9), rgb(0.8,0.2,0.5,0.9) , rgb(0.7,0.5,0.1,0.9) )
+colors_in=c( rgb(0.2,0.5,0.5,0.4), rgb(0.8,0.2,0.5,0.4) , rgb(0.7,0.5,0.1,0.4) )
+
+pdf("../figures/radar_teams.pdf", paper="a4r", width=10, height=10)
+
+radarchart( as.data.frame(temp), axistype=1 , 
+    #custom polygon
+    pcol=colors_border , pfcol=colors_in , plwd=4 , plty=1,
+    #custom the grid
+    cglcol="grey", cglty=1, axislabcol="grey", cglwd=0.8,
+    #custom labels
+    vlcex=1.5 
+    )
+
+legend(x=1.2, y=1, legend = rownames(temp[c(5,4,3),]), bty = "n", pch=20 , col=colors_in[c(3,2,1)] , text.col = "grey", cex=1.2, pt.cex=3)
+
+dev.off()
+
+```
+
+3.  How Often did you connect with relevant people
+
+```{r}
+
+el_ho = as.data.frame(evaluate["h_o"])
+colnames(el_ho) = c("ID", "Team", "variable", "value", "score")
+el_ho$type = "evaluate"
+
+
+ac_ho = as.data.frame(accelerate["h_o"])
+colnames(ac_ho) = c("ID", "Team", "variable", "value", "score")
+ac_ho$type = "accelerate"
+
+
+```
+
+
+
+```{r}
+
+ho = rbind(el_ho, ac_ho)
+ho$type = factor(ho$type, levels = c("evaluate", "accelerate"))
+
+val = sort(factor(unique(ho$value), levels = c("Never", "Less than once a week", "Once a week", "Two to three times a week", "Four times or more a week")))
+
+ho_t = ho %>% group_by(type, variable) %>% summarise(mean = mean(score), se = se(score))
+
+plt = ggplot(ho_t, aes(x = variable, y = mean, fill = type, color = type)) + geom_point(position = position_dodge(width = 0.3, preserve = "total")) + geom_errorbar(aes(ymin = mean-se, ymax = mean+se), position = position_dodge(width = 0.3, preserve = "total"), width = 0) + theme_bw(base_size = 22) + scale_y_continuous(labels=c(0:4), breaks=0:4, limits=c(0,4)) + ylab("") + xlab("") + theme(legend.title = element_blank())
+
+ggplotly(plt)
+
+ggsave(plt, filename = "../figures/how_often_compare.png", width = 10, height = 5)
+
+```
+
+By Team1
+
+```{r}
+
+ho$status = "evaluate"
+ho$status[ho$Team %in% unique(ho$Team[ho$type == "accelerate"])] = "accelerate"
+
+ho$status = factor(ho$status, levels = c("evaluate", "accelerate"))
+
+ho_t = ho %>% group_by(type, variable, status) %>% summarise(mean = mean(score), se = se(score), count = n())
+
+plt = ggplot(ho_t[ho_t$type == "evaluate",], aes(x = variable, y = mean, fill = status, color = status)) + geom_point(position = position_dodge(width = 0.3, preserve = "total")) + geom_errorbar(aes(ymin = mean-se, ymax = mean+se), position = position_dodge(width = 0.3, preserve = "total"), width = 0) + theme_bw(base_size = 22)  + ylab("") + xlab("") + ggtitle("How often did you connect with these people \n for feedback and support for your team project?") + scale_y_continuous(labels=val, breaks=0:4, limits=c(0,4))+ theme(legend.title = element_blank()) + theme(plot.title = element_text(hjust = 0.5, size = 20))
+
+ggplotly(plt)
+
+ggsave(plt, filename = "../figures/how_often_evaluate.png", width = 10, height = 5)
+
+```
+
+Communication Tools (No Slack option in evaluate - There is Other listed, but frequency is unsure)
+
+```{r}
+
+el_wc = as.data.frame(evaluate["w_c"])
+colnames(el_wc) = c("ID", "Team", "variable", "value", "score")
+el_wc$type = "evaluate"
+
+ac_wc = as.data.frame(accelerate["w_c"])
+colnames(ac_wc) = c("ID", "Team", "variable", "value", "score")
+ac_wc$type = "accelerate"
+
+wc = rbind(el_wc, ac_wc)
+
+val = sort(factor(unique(wc$value), levels = c("Never", "Rarely", "Sometimes", "Often", "Always")))
+
+wc_t = wc %>% group_by(type, variable) %>% summarise(mean = mean(score), se = se(score))
+
+plt = ggplot(wc_t[!wc_t$variable == "Other...specify.in.next.question..",], aes(x = variable, y = mean, fill = type, color = type)) + geom_point(position = position_dodge(width = 0.3, preserve = "total")) + geom_errorbar(aes(ymin = mean-se, ymax = mean+se), position = position_dodge(width = 0.3, preserve = "total"), width = 0) + theme_bw(base_size = 20) + scale_y_continuous(labels=val, breaks=0:4, limits=c(0,4)) + ylab("") + xlab("") + theme(axis.text.x = element_text(angle = 45))+ theme(legend.title = element_blank())
+
+ggplotly(plt)
+```
+
+Issues (not very helpful)
+
+```{r}
+
+el_di = as.data.frame(evaluate["d_i"])
+colnames(el_di) = c("ID", "Team", "variable", "value", "score")
+el_di$type = "evaluate"
+
+ac_di = as.data.frame(accelerate["d_i"])
+colnames(ac_di) = c("ID", "Team", "variable", "value", "score")
+ac_di$type = "accelerate"
+
+di = rbind(el_di, ac_di)
+di$type = factor(di$type, levels = c("evaluate", "accelerate"))
+
+val = sort(factor(unique(di$value), levels = c("Never", "Rarely", "Sometimes", "Often", "Always")))
+
+di_t = di %>% group_by(type, variable) %>% summarise(mean = mean(score), se = se(score))
+
+plt = ggplot(di_t, aes(x = variable, y = mean, fill = type, color = type)) + geom_point(position = position_dodge(width = 0.3, preserve = "total")) + geom_errorbar(aes(ymin = mean-se, ymax = mean+se), position = position_dodge(width = 0.3, preserve = "total"), width = 0) + theme_bw(base_size = 20)  + ylab("") + xlab("") + theme(axis.text.x = element_text(angle = 0)) + scale_y_continuous(labels=val, breaks=0:4, limits=c(0,4))+ theme(legend.title = element_blank())
+
+ggplotly(plt)
+
+ggsave(plt, filename = "../figures/had_issues_compare.png", width = 10, height = 7)
+
+```
+
+Issues (Only Accelerate Teams)
+
+```{r}
+
+di_t = di[di$Team %in% unique(di$Team[di$type == "accelerate"]),] %>% group_by(type, variable) %>% summarise(mean = mean(score), se = se(score))
+
+plt = ggplot(di_t, aes(x = variable, y = mean, fill = type, color = type)) + geom_point(position = position_dodge(width = 0.3, preserve = "total")) + geom_errorbar(aes(ymin = mean-se, ymax = mean+se), position = position_dodge(width = 0.3, preserve = "total"), width = 0) + theme_bw(base_size = 20)  + ylab("") + xlab("") + theme(axis.text.x = element_text(angle = 0)) + scale_y_continuous(labels=val, breaks=0:4, limits=c(0,4))+ theme(legend.title = element_blank())
+
+ggplotly(plt)
+
+ggsave(plt, filename = "../figures/had_issues_compare_acc_teams.png", width = 10, height = 7)
+
+```
+
+Gender Analysis
+
+```{r}
+
+acc_team = as.character(unique(accelerate[[1]]$What.is.your.team.))
+
+gen = reg[,c("gender", "Team")]
+#gen$Teaml = reg_map[gen$Team]
+gen = merge(gen, reg_map, by.x = "Team", by.y = "old_name", all.x = TRUE)
+gen$Team = gen$new_name
+gen = gen %>% select(-new_name)
+
+temp = gen %>% group_by(Team, gender) %>% summarise(count = n())
+
+temp$type = 1
+temp$type[temp$Team %in% acc_team] = 2
+
+col = wes_palette("GrandBudapest1", 3)
+#col = hp(n = 3, option = "LunaLovegood")
+
+temp$gender = factor(temp$gender, levels = c("Prefer not to say", "Male", "Female" ))
+
+plt = ggplot(temp, aes(x = count, y = reorder(Team, type), fill = gender)) + geom_bar(stat = "identity") + theme_bw(base_size = 22) + ylab("") + xlab("") + scale_fill_manual(values = c(col[1], col[2], col[3])) + theme(legend.title = element_blank()) #+ geom_text(stat='identity', aes(label= count), hjust=-1)
+
+ggplotly(plt)
+
+ggsave(plt, filename = "../figures/gender_dist.png", height = 5, width = 15)
+
+```
+
+
+Background Radar
+
+```{r}
+
+back = reg[ ,c("new_name", "background")]
+
+back = clean_split_mcq(back)
+colnames(back) = c("Team", "bgr")
+
+#back$background = as.character(back$background)
+#back = back %>% rowwise() %>% mutate(bgr = list(trimws(strsplit(background, ",")[[1]])))
+
+#back = unnest(back, cols = c("bgr"))
+
+```
+
+```{r}
+
+temp = back[back$Team %in% acc_team,] %>% group_by(bgr, Team) %>% summarise(count = n())
+
+temp = reshape2::acast(temp, formula = Team~bgr)
+temp[is.na(temp)] = 0
+
+temp = rbind(rep(4, ncol(temp)), rep(0,ncol(temp)), temp)
+temp = as.data.frame(temp)
+
+#colors_border=c( rgb(0.2,0.5,0.5,0.9), rgb(0.8,0.2,0.5,0.9) , rgb(0.7,0.5,0.1,0.9) )
+#colors_in=c( rgb(0.2,0.5,0.5,0.4), rgb(0.8,0.2,0.5,0.4) , rgb(0.7,0.5,0.1,0.4) )
+
+png(filename = "../figures/reg_background.png")
+
+radarchart( as.data.frame(temp), axistype=1 , 
+    #custom polygon
+    plwd=4 , plty=1,
+    #custom the grid
+    cglcol="grey", cglty=1, axislabcol="grey", cglwd=0.8,
+    #custom labels
+    vlcex=0.5 
+    )
+
+legend(x=1.4, y=1, legend = rownames(temp[c(5,4,3),]), bty = "n", pch=20 , col=colors_in[c(3,2,1)] , text.col = "grey", cex=1.2, pt.cex=3)
+
+dev.off()
+
+```
+
+
+
+
+Sankey Networks
+
+```{r}
+
+library(networkD3)
+library(rbokeh)
+library(webshot)
+
+for (i in c("gender", "country_orig", "country_resid", "education", "communication", "exante_project_SDG", "background", "occupation"))
+{
+  
+  temp = reg[ ,c("new_name", i)]
+  
+  temp = clean_split_mcq(temp)
+  colnames(temp) = c("Team", "var")
+  
+  nodes = data.frame(Name = union(unique(temp$Team), unique(temp$var)))
+
+  links = temp %>% group_by(Team, var) %>% summarise(count = n())
+  links$IDsource <- match(links$Team, nodes$Name)-1 
+  links$IDtarget <- match(links$var, nodes$Name)-1
+
+  plt = sankeyNetwork(Links = links, Nodes = nodes,
+                     Source = "IDsource", Target = "IDtarget",
+                     Value = "count", NodeID = "Name", 
+                     sinksRight=FALSE, fontSize = 15)
+  #plt
+  
+  visSave(plt, paste("../figures/sankey/", i, "_reg.html", sep = ""))
+  #widget2png(plt, paste("../figures/sankey/", i, "_reg.png", sep = ""))
+  
+  webshot(paste("../figures/sankey/", i, "_reg.html", sep = ""), paste("../figures/sankey/", i, "_reg.png", sep = ""))
+}
+
+```
+
+Age by Gender
+
+```{r}
+
+reg$age = floor(as.numeric(difftime(as.Date("2022-04-01"), as.Date(reg$birthday, tryFormats = c("%m/%d/%Y")), unit="weeks"))/52.25)
+
+plt = ggplot(reg, aes(x = gender, y = age)) + geom_boxplot(fill = "gray") + theme_bw(base_size = 20) + xlab("") + ylab("Age") + geom_point(aes(x = gender, y = age), alpha = 0.2)
+ggplotly(plt)
+
+ggsave(plt, filename = "../figures/age_gender.png", height = 7, width = 5)
+```
+

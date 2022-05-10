@@ -1,0 +1,110 @@
+---
+title: "Corwd4SDG Slack"
+output: html_notebook
+---
+
+Separate notebooks for slack data to incorporate my older functions
+
+0. Read data and load the libraries
+
+```{r}
+
+library("jsonlite")
+library("stringr")
+library("tidyr")
+
+source("custom_functions.R")
+
+path = "../data/Crowd4SDG Slack export Oct 6 2021 - Nov 16 2021" # Path to the root folder with the API   extracted Slack data
+folders = list.files(path)
+
+users_json = fromJSON(paste(path,"/users.json", sep = "")) 
+
+channels_json = fromJSON(paste(path,"/channels.json", sep = ""))
+
+greet_bots = "B0100JVEKUG"
+
+```
+
+**************************************
+
+1. Users Dataframe
+
+```{r}
+
+users_df = users_json %>% do.call(data.frame, .) %>% as_tibble()
+
+#Subset necessary columns
+
+users_df = users_df %>% select("id", "real_name", "tz", "deleted", "is_admin", "is_owner", "is_primary_owner", "is_restricted", "is_ultra_restricted", "is_bot", "is_app_user", "is_invited_user", "updated", title = "profile.title", image = "profile.image_512")
+
+
+#write.csv(users_df, "Processed data/users.csv")
+
+```
+
+************************************
+
+2. Channels Dataframe
+
+```{r}
+
+channels_df = channels_json
+channels_members = channels_df %>% select("id", "name", "members")
+channels_members = unnest(channels_members, cols = c("members"))
+
+channels_pins = channels_df %>% select("id", "name", "pins")
+colnames(channels_pins) = c("channel_id", "name", "pins")
+channels_pins = unnest(channels_pins, cols = c("pins"))
+colnames(channels_pins)[colnames(channels_pins) == "id"] = "message_id"
+
+channels_df = channels_df %>% select(-"pins", -"members") %>% do.call(data.frame, .) %>% as_tibble()
+
+#write.csv(channels_members, "Processed data/channel_members.csv")
+#write.csv(channels_pins, "Processed data/channel_pins.csv")
+#write.csv(channels_df, "Processed data/channels.csv")
+
+```
+
+**************************************
+
+3. The rest - texts, emoticon reactions, text mentions, replies, channel joins
+
+```{r}
+
+texts = data.frame()
+emoticons = data.frame()
+text_mentions = data.frame()
+channel_joins = data.frame()
+replies = data.frame()
+
+for (i in folders[-grep(".json",folders)])
+{
+    files = list.files(paste(path,"/",i, sep = ""), pattern = '*json')   
+    
+    for (j in files)
+    {
+      filename = paste(path,"/",i,"/",j,sep="")
+      content = fromJSON(filename)
+      list = processSlack_Daily(content)
+      
+      texts = rbind(texts, cbind(list[[1]], "channel" = rep(i, nrow(list[[1]]))))
+      emoticons = rbind(emoticons, cbind(list[[2]], "channel" = rep(i, nrow(list[[2]]))))
+      text_mentions = rbind(text_mentions, cbind(list[[3]], "channel" = rep(i, nrow(list[[3]])))) 
+      channel_joins = rbind(channel_joins, cbind(list[[4]], "channel" = rep(i, nrow(list[[4]]))))
+      replies = rbind(replies, cbind(list[[5]], "channel" = rep(i, nrow(list[[5]]))))
+    }
+}
+
+```
+
+*******************************************
+
+4. Write as RData (New)
+
+```{r}
+
+save(texts, emoticons, text_mentions, channel_joins, replies, users_df, channels_df, channels_members, channels_pins, file = "../processed data/slack.RData")
+
+```
+

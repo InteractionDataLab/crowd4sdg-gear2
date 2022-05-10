@@ -1,0 +1,350 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+Load Data
+
+```{r}
+
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+
+source("../../Accelerate/notebooks/custom_functions.R")
+
+teams = read_excel("../data/O17ClimateGender_teamformation.xlsx")
+#teams = lapply(teams, as.character)
+
+assesment = read_excel("../data/O17ClimateGender_assessment.xlsx")
+
+load("../../Accelerate/processed data/registration.RData")
+
+map = read.csv("../../Accelerate/data/team_users_hashed.csv", stringsAsFactors = FALSE)
+colnames(map) = c("Team", "ID", "Hash", "Mentors")
+
+reg = merge(reg, map[,c("Team", "Hash")], by.x = "ID", by.y = "Hash")
+
+reg_map = c("A2: Women & Technology Against Climate Change" = "T6: Women & Technology Against Climate Change", "B2: TEAM FOILED" = "T3: TEAM FOILED", "C1: Andapé Institute" = "T13: Andapé Institute", "C3: WOMER" = "T5: WOMER", "A5: Donate Water Project" = "T9: DonateWater", "B5: Rights of Climate" = "T11: Rights of Climate", "B3: Eco Winners" = "T14: Eco Winners", "B4: Women 4 Sustainable World" = "T12: Women 4 Sustainable World", "A1: Up Get App/CitiCERN" = "T7: UpGet app - CitiCERN Project", "B1: Water Warriors" = "T10: Water Warriors", "C2: PAM" = "T4: PAM", "C4: Climate Gender Justice" = "T8: Climate Gender Justice", "A3: Rhythm of Bamboos" = "T1: SDesiGn (Old name: Rhythm of Bamboos)", "C5: Ashifa Nazrin" = "C5: Ashifa Nazrin", "A4: Flood Rangers" = "T2: Flood Rangers")
+
+reg_map = data.frame(old_name = names(reg_map), new_name = reg_map)
+reg = merge(reg, reg_map, by.x = "Team", by.y = "old_name", all.x = TRUE)
+
+write.csv(unnest(reg, cols = c("communication")), file = "../processed data/reg_edited.csv")
+
+map = merge(map, reg_map, by.x = "Team", by.y = "old_name", all.x = TRUE)
+map$new_name = as.character(map$new_name)
+map$new_name[map$Team == "Organizing Team"] = "Organizing Team"
+
+
+```
+
+Outcome Variable
+
+
+```{r}
+
+outcome = assesment[,c("Team", "Total", "Weekly Evaluation", "Commitment", "Attendance", "Deliverables")]
+outcome = merge(outcome, teams[,c("Team Name", "Stage")], by.x = "Team", by.y = "Team Name", all.x = TRUE)
+outcome$Stage = factor(outcome$Stage, levels = c("Evaluate", "Accelerate", "Refine"), ordered = TRUE)
+
+```
+
+
+Surveys and Interactions
+
+```{r}
+
+load("../../Evaluate/processed data/surveys.RData")
+
+inter = interactions[,c(1,8,2,3)]
+inter = merge(inter, map[,c("ID", "new_name")], by.x = "user_id", by.y = "ID", all.x = TRUE)
+colnames(inter) = c("From", "To", "Survey_id", "Question", "From_team")
+inter = merge(inter, map[,c("ID", "new_name")], by.x = "To", by.y = "ID", all.x = TRUE)
+colnames(inter)[colnames(inter) == "new_name"] = "To_team"
+
+inter = inter[!inter$To %in% c(34), c(2,1,3,4,5,6)]
+
+g_int_teams = graph_from_data_frame(inter[,c(5,6,1:4)], directed = FALSE, vertices = teams)
+E(g_int_teams)$weight = 1
+g_int_teams_simp = simplify(g_int_teams, remove.loops = FALSE)
+
+```
+
+Data Frame of properties - Surveys
+
+
+```{r}
+
+stats = data.frame()
+
+for (i in V(g_int_teams_simp)$name)
+{
+  if (!i %in% "Organizing Team")
+  {
+    intra = E(g_int_teams_simp)$weight[get.edge.ids(g_int_teams_simp, vp = c(i, i))]
+    org = E(g_int_teams_simp)$weight[get.edge.ids(g_int_teams_simp, vp = c(i, "Organizing Team"))]
+    total = strength(g_int_teams_simp, vids = i)
+    
+    stats = rbind(stats, data.frame(Team = i, strength_intra_team = intra, strength_org_team = org, strength_inter_team = (total - (2*intra) - org), strength_intra_team_norm = 2*intra/total, strength_org_team_norm = org/total, strength_inter_team_norm = (total - (2*intra) - org)/total))
+  }
+}
+
+```
+
+Data Frame of Properties - Slack
+
+```{r}
+
+load("../../Evaluate/processed data/slack_all_int.RData")
+g_slack = graph_from_data_frame(df_total[,c(3,4,1,2,3)], directed = FALSE)
+E(g_slack)$weight = 1
+g_slack_simp = simplify(g_slack, remove.loops = FALSE)
+
+stats_slack = data.frame()
+
+for (i in V(g_slack_simp)$name)
+{
+  if (!i %in% c("Organizing Team", "Tool Owner"))
+  {
+    intra = E(g_slack_simp)$weight[get.edge.ids(g_slack_simp, vp = c(i, i))]
+    org = E(g_slack_simp)$weight[get.edge.ids(g_slack_simp, vp = c(i, "Organizing Team"))]
+    total = strength(g_slack_simp, vids = i)
+    
+    if (length(intra) == 0)
+      intra = 0
+    if (length(org) == 0)
+      org = 0
+    
+    stats_slack = rbind(stats_slack, data.frame(Team = i, slack_strength_intra_team = intra, slack_strength_org_team = org, slack_strength_inter_team = (total - (2*intra) - org), slack_strength_intra_team_norm = 2*intra/total, slack_strength_org_team_norm = org/total, slack_strength_inter_team_norm = (total - (2*intra) - org)/total))
+  }
+}
+
+```
+
+Merge Interaction Properties
+
+```{r}
+
+stats_slack = merge(stats_slack, reg_map, by.x = "Team", by.y = "old_name", all.x = TRUE)
+stats_slack$Team = stats_slack$new_name
+stats_slack = stats_slack %>% select(-new_name)
+
+interaction_stats = merge(stats, stats_slack, by.x = "Team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+
+```
+
+Clean Correlation Plot
+
+```{r}
+
+temp = merge(interaction_stats, outcome, by.x = "Team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+
+df_corr = data.frame()
+
+for (i in colnames(outcome))
+{
+  if(! i %in% c("Team", "Stage"))
+  {
+    for (j in colnames(interaction_stats))
+    {
+      if(!j %in% c("Team"))
+      {
+        c = cor.test(temp[,j], temp[,i])
+        
+        df_corr = rbind(df_corr, data.frame(i = i, j = j, cor = c$estimate, p_val = c$p.value))
+        
+      }
+    }
+  }
+}
+
+df_corr$cor[df_corr$p_val > 0.1] = 0
+df_corr$cor = round(df_corr$cor, 3)
+
+plt = ggplot(df_corr) + geom_tile(aes(x = i, y = j, fill = cor), lwd = 1.5, linetype = 1) + scale_fill_gradient2(low = "blue", high = "red") + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) + ylab("") + xlab("") + geom_text(aes(x = i, y = j, label = cor)) + ggtitle("Correlation Plot - Network Strength vs Outcome")
+
+ggplotly(plt)
+
+
+```
+
+Diversity Measures
+
+```{r}
+
+shannon = function(list)
+{
+  ent = 0
+  for (i in unique(list))
+  {
+    t = sum(list == i)
+    n = length(list)
+    ent = ent + (t/n)*log(t/n)
+  }
+  
+  return(-1*ent)
+}
+
+simpson = function(list)
+{
+  ent = 0
+  for (i in unique(list))
+  {
+    t = sum(list == i)
+    n = length(list)
+    ent = ent + (t/n)*(t/n)
+  }
+  
+  return(1/ent)
+}
+
+```
+
+```{r}
+
+metrics = data.frame(Team = unique(reg$new_name))
+
+for (i in c("gender", "country_orig", "country_resid", "education", "communication", "exante_project_SDG", "background", "occupation"))
+{
+  temp = reg[,c("new_name", i)]
+  temp = clean_split_mcq(temp)
+  colnames(temp) = c("Team", "var")
+  
+
+  t = temp %>% group_by(Team) %>% summarise(shannon = shannon(var), simpson = simpson(var), span = length(unique(var)))
+  colnames(t) = c("Team", paste(i, "_shannon", sep = ''), paste(i, "_simpson", sep = ''), paste(i, "_span", sep = ''))
+  
+  metrics = merge(metrics, t, by.x = "Team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+  
+}
+
+metrics = merge(metrics, teams, by.x = "Team", by.y = "Team Name", all.x = TRUE)
+
+```
+
+```{r}
+
+
+temp = merge(metrics[,c(1:25)], outcome, by.x = "Team", by.y = "Team")
+
+df_corr = data.frame()
+
+for (i in colnames(outcome))
+{
+  if(! i %in% c("Team", "Stage"))
+  {
+    for (j in colnames(metrics))
+    {
+      if(!j %in% c("Team", "Type", "Stage"))
+      {
+        c = cor.test(temp[,j], temp[,i])
+        
+        df_corr = rbind(df_corr, data.frame(i = i, j = j, cor = c$estimate, p_val = c$p.value))
+        
+      }
+    }
+  }
+}
+
+df_corr$cor[df_corr$p_val > 0.1] = 0
+df_corr$cor = round(df_corr$cor, 3)
+
+plt = ggplot(df_corr) + geom_tile(aes(x = i, y = j, fill = cor), lwd = 1.5, linetype = 1) + scale_fill_gradient2(low = "blue", high = "red") + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) + ylab("") + xlab("") + geom_text(aes(x = i, y = j, label = cor)) + ggtitle("Correlation Plot - Diversity Measures vs Outcome")
+
+ggplotly(plt)
+
+```
+
+Slack Correlations (Special Questions)
+
+```{r}
+
+pdf("../figures/interaction_questions_outcome_correlation.pdf")
+
+for(k in unique(inter$Question))
+{
+  g_temp = graph_from_data_frame(inter[inter$Question == k, c(5,6,1:4)], directed = FALSE, vertices = teams)
+  E(g_temp)$weight = 1
+  g_temp_simp = simplify(g_temp, remove.loops = FALSE)
+  
+  stats = data.frame()
+
+  for (i in V(g_temp_simp)$name)
+  {
+    if (!i %in% "Organizing Team")
+    {
+      intra = E(g_temp_simp)$weight[get.edge.ids(g_temp_simp, vp = c(i, i))]
+      org = E(g_temp_simp)$weight[get.edge.ids(g_temp_simp, vp = c(i, "Organizing Team"))]
+      total = strength(g_temp_simp, vids = i)
+      
+      if (length(intra) == 0) 
+        intra = 0
+      if(length(org) == 0)
+        org = 0
+    
+      stats = rbind(stats, data.frame(Team = i, strength_intra_team = intra, strength_org_team = org, strength_inter_team = (total - (2*intra) - org), strength_intra_team_norm = 2*intra/total, strength_org_team_norm = org/total, strength_inter_team_norm = (total - (2*intra) - org)/total))
+    }
+  }
+  
+  temp = merge(stats, outcome, by.x = "Team", by.y = "Team", all.x = TRUE, all.y = TRUE)
+
+  df_corr = data.frame()
+  
+  for (i in colnames(outcome))
+  {
+    if(! i %in% c("Team", "Stage"))
+    {
+      for (j in colnames(stats))
+      {
+        if(!j %in% c("Team"))
+        {
+          c = cor.test(temp[,j], temp[,i])
+          
+          df_corr = rbind(df_corr, data.frame(i = i, j = j, cor = c$estimate, p_val = c$p.value))
+          
+        }
+      }
+    }
+  }
+  
+  df_corr$cor[df_corr$p_val > 0.1] = 0
+  df_corr$cor = round(df_corr$cor, 3)
+  
+  plt = ggplot(df_corr) + geom_tile(aes(x = i, y = j, fill = cor), lwd = 1.5, linetype = 1) + scale_fill_gradient2(low = "blue", high = "red") + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) + ylab("") + xlab("") + geom_text(aes(x = i, y = j, label = cor)) + ggtitle(k)
+  
+  print(plt)
+}
+
+dev.off()
+
+```
+
+
+Stages Crossed vs Properties (Evaluate)
+
+```{r}
+
+interaction_stats = merge(interaction_stats, teams, by.x = "Team", by.y = "Team Name", all.x = TRUE)
+
+pdf("../figures/stage_props.pdf")
+
+for (i in colnames(interaction_stats))
+{
+  if (! i %in% c("Team", "Stage", 'Type'))
+  {
+    temp = interaction_stats[, c("Stage", i)]
+    colnames(temp) = c("Stage", "var")
+    
+    plt = ggplot(temp, aes(x = Stage, y = var)) + geom_point(aes(x = Stage, y = var), alpha = 0.3) + theme_bw(base_size = 25) + geom_boxplot() + ggtitle(i) + ylab("")
+    print(plt)
+  }
+}
+
+dev.off()
+
+```
+
